@@ -1,7 +1,6 @@
 //! Standard Portable Intermediate Representation defs
 
 pub type Id = u32;
-pub type ResultId = Id;
 
 #[repr(C)]
 pub struct ModuleBinaryHeader {
@@ -157,17 +156,22 @@ impl Decoration {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ExecutionMode {
+    OriginUpperLeft,
+    OriginLowerLeft,
     LocalSize(u32, u32, u32),
 }
 impl ExecutionMode {
     const fn word_count(&self) -> u16 {
         match self {
+            Self::OriginUpperLeft | Self::OriginLowerLeft => 1,
             Self::LocalSize(_, _, _) => 4,
         }
     }
 
     fn encode(&self, sink: &mut Vec<u32>) {
         match self {
+            Self::OriginUpperLeft => sink.push(7),
+            Self::OriginLowerLeft => sink.push(8),
             Self::LocalSize(x, y, z) => sink.extend([17, *x, *y, *z]),
         }
     }
@@ -314,63 +318,73 @@ impl core::ops::BitOrAssign for MemoryOperands {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum PureResultInstruction {
+pub enum PureResultInstruction<IdType> {
     OpConvertFToS {
-        result_type: Id,
-        float_value: Id,
+        result_type: IdType,
+        float_value: IdType,
     },
     OpBitcast {
-        result_type: Id,
-        operand: Id,
+        result_type: IdType,
+        operand: IdType,
     },
     OpVectorShuffle {
-        result_type: Id,
-        vector1: Id,
-        vector2: Id,
+        result_type: IdType,
+        vector1: IdType,
+        vector2: IdType,
         components: Vec<u32>,
     },
     OpCompositeExtract {
-        result_type: Id,
-        composite: Id,
+        result_type: IdType,
+        composite: IdType,
         indexes: Vec<u32>,
     },
     OpIAdd {
-        result_type: Id,
-        operand1: Id,
-        operand2: Id,
+        result_type: IdType,
+        operand1: IdType,
+        operand2: IdType,
     },
     OpFAdd {
-        result_type: Id,
-        operand1: Id,
-        operand2: Id,
+        result_type: IdType,
+        operand1: IdType,
+        operand2: IdType,
+    },
+    OpVectorTimesScalar {
+        result_type: IdType,
+        vector: IdType,
+        scalar: IdType,
+    },
+    OpAccessChain {
+        result_type: IdType,
+        base: IdType,
+        indexes: Vec<IdType>,
     },
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum Instruction {
+pub enum Instruction<IdType> {
     OpCapability(Capability),
     OpMemoryModel(AddressingModel, MemoryModel),
-    OpDecorate(Id, Decoration),
+    OpDecorate(IdType, Decoration),
     OpEntryPoint {
         execution_model: ExecutionModel,
-        func_id: Id,
+        func_id: IdType,
         name: String,
-        interface: Vec<Id>,
+        interface: Vec<IdType>,
     },
-    OpExecutionMode(Id, ExecutionMode),
-    OpTypeVoid(ResultId),
-    OpTypeBool(ResultId),
+    OpExecutionMode(IdType, ExecutionMode),
+    OpTypeVoid(IdType),
+    OpTypeBool(IdType),
     OpTypeInt {
-        result: ResultId,
+        result: IdType,
         bits: u32,
         signed: bool,
     },
-    OpTypeFloat(ResultId, u32),
-    OpTypeVector(ResultId, Id, u32),
-    OpTypeMatrix(ResultId, Id, u32),
+    OpTypeFloat(IdType, u32),
+    OpTypeVector(IdType, IdType, u32),
+    OpTypeMatrix(IdType, IdType, u32),
     OpTypeImage {
-        result: ResultId,
-        sampled_type: Id,
+        result: IdType,
+        sampled_type: IdType,
         dim: ImageDimension,
         depth: ImageDepthFlag,
         arrayed: bool,
@@ -379,97 +393,102 @@ pub enum Instruction {
         format: ImageFormat,
         qualifier: Option<AccessQualifier>,
     },
-    OpTypeSampler(ResultId),
+    OpTypeSampler(IdType),
     OpTypeSampledImage {
-        result: ResultId,
-        image_type: Id,
+        result: IdType,
+        image_type: IdType,
     },
     OpTypeArray {
-        result: ResultId,
-        element_type: Id,
-        length_expr: Id,
+        result: IdType,
+        element_type: IdType,
+        length_expr: IdType,
     },
     OpTypeRuntimeArray {
-        result: ResultId,
-        element_type: Id,
+        result: IdType,
+        element_type: IdType,
     },
     OpTypePointer {
-        result: ResultId,
+        result: IdType,
         storage_class: StorageClass,
-        r#type: Id,
+        r#type: IdType,
     },
     OpTypeFunction {
-        result: ResultId,
-        return_type: Id,
-        parameter_types: Vec<Id>,
+        result: IdType,
+        return_type: IdType,
+        parameter_types: Vec<IdType>,
     },
     OpConstantTrue {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
     },
     OpConstantFalse {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
     },
     OpConstant {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
         value: Vec<u32>,
     },
     OpConstantComposite {
-        result_type: Id,
-        result: ResultId,
-        consituents: Vec<Id>,
+        result_type: IdType,
+        result: IdType,
+        consituents: Vec<IdType>,
     },
     OpConstantSampler {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
         addressing: SamplerAddressingMode,
         normalized: bool,
         filter: SamplerFilterMode,
     },
     OpConstantNull {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
     },
     OpImageRead {
-        result_type: Id,
-        result: Id,
-        image: Id,
-        coordinate: Id,
+        result_type: IdType,
+        result: IdType,
+        image: IdType,
+        coordinate: IdType,
         operands: Option<u32>, // TODO: operands
     },
     OpImageWrite {
-        image: Id,
-        coordinate: Id,
-        texel: Id,
+        image: IdType,
+        coordinate: IdType,
+        texel: IdType,
         operands: Option<u32>, // TODO: operands
     },
     OpReturn,
-    OpReturnValue(Id),
+    OpReturnValue(IdType),
     OpFunction {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
         control: FunctionControl,
-        r#type: Id,
+        r#type: IdType,
     },
     OpFunctionEnd,
-    OpLabel(ResultId),
+    OpLabel(IdType),
     OpVariable {
-        result_type: Id,
-        result: ResultId,
+        result_type: IdType,
+        result: IdType,
         storage_class: StorageClass,
-        initializer: Option<Id>,
+        initializer: Option<IdType>,
     },
     OpLoad {
-        result_type: Id,
-        result: ResultId,
-        pointer: Id,
+        result_type: IdType,
+        result: IdType,
+        pointer: IdType,
         memory_operands: Option<MemoryOperands>,
     },
-    PureResult(ResultId, PureResultInstruction),
+    OpStore {
+        pointer: IdType,
+        object: IdType,
+        memory_operands: Option<MemoryOperands>,
+    },
+    PureResult(IdType, PureResultInstruction<IdType>),
 }
-impl Instruction {
+impl Instruction<Id> {
     pub fn encode(self, sink: &mut Vec<u32>) {
         match self {
             Self::OpCapability(cap) => sink.extend([instruction_word(2, 17), cap as _]),
@@ -702,6 +721,36 @@ impl Instruction {
                 operand1,
                 operand2,
             ]),
+            Self::PureResult(
+                result,
+                PureResultInstruction::OpVectorTimesScalar {
+                    result_type,
+                    vector,
+                    scalar,
+                },
+            ) => sink.extend(vec![
+                instruction_word(5, 142),
+                result_type,
+                result,
+                vector,
+                scalar,
+            ]),
+            Self::PureResult(
+                result,
+                PureResultInstruction::OpAccessChain {
+                    result_type,
+                    base,
+                    indexes,
+                },
+            ) => {
+                sink.extend([
+                    instruction_word(4 + indexes.len() as u16, 65),
+                    result_type,
+                    result,
+                    base,
+                ]);
+                sink.extend(indexes);
+            }
             Self::OpImageRead {
                 result_type,
                 result,
@@ -779,6 +828,20 @@ impl Instruction {
                     result_type,
                     result,
                     pointer,
+                ]);
+                if let Some(x) = memory_operands {
+                    sink.push(x.0);
+                }
+            }
+            Self::OpStore {
+                pointer,
+                object,
+                memory_operands,
+            } => {
+                sink.extend([
+                    instruction_word(3 + if memory_operands.is_some() { 1 } else { 0 }, 62),
+                    pointer,
+                    object,
                 ]);
                 if let Some(x) = memory_operands {
                     sink.push(x.0);

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap},
     io::Write,
     rc::Rc,
     sync::Arc,
@@ -74,7 +74,11 @@ pub enum TypeId {
     Pointer(Box<TypeId>, StorageClass),
 }
 impl TypeId {
-    fn make_instruction(&self, result: Id, ctx: &mut InstructionEmitter) -> Instruction {
+    fn make_instruction(
+        &self,
+        result: RelativeId,
+        ctx: &mut InstructionEmitter,
+    ) -> Instruction<RelativeId> {
         match self {
             Self::Void => Instruction::OpTypeVoid(result),
             Self::Bool => Instruction::OpTypeBool(result),
@@ -217,14 +221,24 @@ pub enum DescriptorAttribute {
 }
 
 #[derive(Debug)]
-pub struct ShaderInputs {
+pub struct ShaderInterface {
     descriptor_set_bounds: BTreeMap<u32, BTreeMap<u32, DescriptorRefDefinition>>,
-    location_bounds: BTreeMap<u32, TypeId>,
+    input_location_bounds: BTreeMap<u32, TypeId>,
+    output_location_bounds: BTreeMap<u32, TypeId>,
+}
+impl ShaderInterface {
+    pub const fn new() -> Self {
+        Self {
+            descriptor_set_bounds: BTreeMap::new(),
+            input_location_bounds: BTreeMap::new(),
+            output_location_bounds: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ComputeShaderContext {
-    inputs: ShaderInputs,
+    inputs: ShaderInterface,
     local_size_x: u32,
     local_size_y: Option<u32>,
     local_size_z: Option<u32>,
@@ -232,10 +246,7 @@ pub struct ComputeShaderContext {
 impl ComputeShaderContext {
     pub const fn new1(local_size_x: u32) -> Self {
         Self {
-            inputs: ShaderInputs {
-                descriptor_set_bounds: BTreeMap::new(),
-                location_bounds: BTreeMap::new(),
-            },
+            inputs: ShaderInterface::new(),
             local_size_x,
             local_size_y: None,
             local_size_z: None,
@@ -244,10 +255,7 @@ impl ComputeShaderContext {
 
     pub const fn new2(local_size_x: u32, local_size_y: u32) -> Self {
         Self {
-            inputs: ShaderInputs {
-                descriptor_set_bounds: BTreeMap::new(),
-                location_bounds: BTreeMap::new(),
-            },
+            inputs: ShaderInterface::new(),
             local_size_x,
             local_size_y: Some(local_size_y),
             local_size_z: None,
@@ -256,10 +264,7 @@ impl ComputeShaderContext {
 
     pub const fn new3(local_size_x: u32, local_size_y: u32, local_size_z: u32) -> Self {
         Self {
-            inputs: ShaderInputs {
-                descriptor_set_bounds: BTreeMap::new(),
-                location_bounds: BTreeMap::new(),
-            },
+            inputs: ShaderInterface::new(),
             local_size_x,
             local_size_y: Some(local_size_y),
             local_size_z: Some(local_size_z),
@@ -317,7 +322,7 @@ impl ComputeShaderContext {
 
 #[derive(Debug)]
 pub struct ComputeShader<Actions: ShaderAction> {
-    inputs: ShaderInputs,
+    inputs: ShaderInterface,
     local_size_x: u32,
     local_size_y: Option<u32>,
     local_size_z: Option<u32>,
@@ -373,13 +378,156 @@ impl<Actions: ShaderAction> ComputeShader<Actions> {
     }
 }
 
+#[derive(Debug)]
+pub enum FragCoordOrigin {
+    LowerLeft,
+    UpperLeft,
+}
+
+#[derive(Debug)]
+pub struct FragmentShaderContext {
+    inputs: ShaderInterface,
+    frag_coord_origin: FragCoordOrigin,
+}
+impl FragmentShaderContext {
+    pub const fn new() -> Self {
+        Self {
+            inputs: ShaderInterface::new(),
+            frag_coord_origin: FragCoordOrigin::UpperLeft,
+        }
+    }
+
+    pub fn frag_coord_origin_lower_left(&mut self) {
+        self.frag_coord_origin = FragCoordOrigin::LowerLeft;
+    }
+
+    pub fn descriptor<T: DescriptorType>(&mut self, set: u32, bound: u32) -> DescriptorRef<T> {
+        match self
+            .inputs
+            .descriptor_set_bounds
+            .entry(set)
+            .or_insert_with(BTreeMap::new)
+            .entry(bound)
+        {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::DEF);
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::DEF {
+                    panic!("descriptor type mismatch before bound");
+                }
+            }
+        }
+
+        DescriptorRef {
+            set,
+            bound,
+            _ph: core::marker::PhantomData,
+        }
+    }
+
+    pub fn input_location<T: Type>(&mut self, location: u32) -> LocationRef<T, InputStorage> {
+        match self.inputs.input_location_bounds.entry(location) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::id());
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::id() {
+                    panic!("location type mismatch before bound");
+                }
+            }
+        }
+
+        LocationRef(location, core::marker::PhantomData)
+    }
+
+    pub fn output_location<T: Type>(&mut self, location: u32) -> LocationRef<T, OutputStorage> {
+        match self.inputs.output_location_bounds.entry(location) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::id());
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::id() {
+                    panic!("location type mismatch before bound");
+                }
+            }
+        }
+
+        LocationRef(location, core::marker::PhantomData)
+    }
+
+    pub fn combine_action<Action: ShaderAction>(self, action: Action) -> FragmentShader<Action> {
+        FragmentShader {
+            inputs: self.inputs,
+            frag_coord_origin: self.frag_coord_origin,
+            action,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FragmentShader<Action: ShaderAction> {
+    inputs: ShaderInterface,
+    frag_coord_origin: FragCoordOrigin,
+    action: Action,
+}
+impl<Action: ShaderAction> FragmentShader<Action> {
+    pub fn export_module(
+        &self,
+        path: &(impl AsRef<std::path::Path> + ?Sized),
+    ) -> std::io::Result<()> {
+        let mut ctx = InstructionEmitter::new();
+        self.action.emit(&mut ctx);
+        let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
+        let mut serialized = Vec::with_capacity(3 + serialized1.len());
+        serialized.extend([
+            Instruction::OpCapability(Capability::Shader),
+            Instruction::OpMemoryModel(AddressingModel::Logical, MemoryModel::GLSL450),
+            Instruction::OpEntryPoint {
+                execution_model: ExecutionModel::Fragment,
+                func_id: epid,
+                name: String::from("main"),
+                interface: interface_ids,
+            },
+            Instruction::OpExecutionMode(
+                epid,
+                match self.frag_coord_origin {
+                    FragCoordOrigin::LowerLeft => ExecutionMode::OriginLowerLeft,
+                    FragCoordOrigin::UpperLeft => ExecutionMode::OriginUpperLeft,
+                },
+            ),
+        ]);
+        serialized.extend(serialized1);
+
+        let mut module = std::fs::File::options()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        let header = ModuleBinaryHeader::new(1, 0, 0, bound);
+        module.write_all(header.as_bytes())?;
+        let mut word_stream = Vec::new();
+        for x in serialized {
+            x.encode(&mut word_stream);
+        }
+        module.write_all(unsafe {
+            core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
+        })
+    }
+}
+
 pub trait Type: core::fmt::Debug {
     fn id() -> TypeId;
 }
 pub trait TypeAddRelation<Right: Type> {
     type Output: Type;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id;
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId;
+}
+pub trait TypeMulRelation<Right: Type> {
+    type Output: Type;
+
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId;
 }
 pub trait VectorType: Type {
     type Element: Type;
@@ -495,6 +643,12 @@ impl StorageClassMarker for InputStorage {
     const VALUE: StorageClass = StorageClass::Input;
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct OutputStorage;
+impl StorageClassMarker for OutputStorage {
+    const VALUE: StorageClass = StorageClass::Output;
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Pointer<T: Type, C: StorageClassMarker>(core::marker::PhantomData<(T, C)>);
 impl<T: Type, C: StorageClassMarker> Type for Pointer<T, C> {
@@ -531,7 +685,7 @@ impl Type for Float {
 impl TypeAddRelation<Float> for Float {
     type Output = Float;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Float>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
@@ -557,7 +711,7 @@ impl Type for Uint {
 impl TypeAddRelation<Uint> for Uint {
     type Output = Uint;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Uint>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -583,7 +737,7 @@ impl Type for Int {
 impl TypeAddRelation<Int> for Int {
     type Output = Int;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Int>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -612,13 +766,26 @@ impl VectorType for Float2 {
 impl TypeAddRelation<Float2> for Float2 {
     type Output = Float2;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Float2>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
             operand1: left,
             operand2: right,
+        })
+    }
+}
+impl TypeMulRelation<Float> for Float2 {
+    type Output = Float2;
+
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
+        let rty = ctx.type_id::<Float2>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorTimesScalar {
+            result_type: rty,
+            vector: left,
+            scalar: right,
         })
     }
 }
@@ -636,13 +803,26 @@ impl VectorType for Float3 {
 impl TypeAddRelation<Float3> for Float3 {
     type Output = Float3;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Float3>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
             operand1: left,
             operand2: right,
+        })
+    }
+}
+impl TypeMulRelation<Float> for Float3 {
+    type Output = Float3;
+
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
+        let rty = ctx.type_id::<Float3>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorTimesScalar {
+            result_type: rty,
+            vector: left,
+            scalar: right,
         })
     }
 }
@@ -660,13 +840,26 @@ impl VectorType for Float4 {
 impl TypeAddRelation<Float4> for Float4 {
     type Output = Float4;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Float4>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
             operand1: left,
             operand2: right,
+        })
+    }
+}
+impl TypeMulRelation<Float> for Float4 {
+    type Output = Float4;
+
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
+        let rty = ctx.type_id::<Float4>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorTimesScalar {
+            result_type: rty,
+            vector: left,
+            scalar: right,
         })
     }
 }
@@ -684,7 +877,7 @@ impl VectorType for Int2 {
 impl TypeAddRelation<Int2> for Int2 {
     type Output = Int2;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Int2>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -708,7 +901,7 @@ impl VectorType for Int3 {
 impl TypeAddRelation<Int3> for Int3 {
     type Output = Int3;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Int3>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -732,7 +925,7 @@ impl VectorType for Int4 {
 impl TypeAddRelation<Int4> for Int4 {
     type Output = Int4;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Int4>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -756,7 +949,7 @@ impl VectorType for Uint2 {
 impl TypeAddRelation<Uint2> for Uint2 {
     type Output = Uint2;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Uint2>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -780,7 +973,7 @@ impl VectorType for Uint3 {
 impl TypeAddRelation<Uint3> for Uint3 {
     type Output = Uint3;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Uint3>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -804,7 +997,7 @@ impl VectorType for Uint4 {
 impl TypeAddRelation<Uint4> for Uint4 {
     type Output = Uint4;
 
-    fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
         let rty = ctx.type_id::<Uint4>();
 
         ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
@@ -866,7 +1059,11 @@ pub enum Constant {
     Int4(i32, i32, i32, i32),
 }
 impl Constant {
-    pub fn make_instruction(&self, result: Id, ctx: &mut InstructionEmitter) -> Instruction {
+    pub fn make_instruction(
+        &self,
+        result: RelativeId,
+        ctx: &mut InstructionEmitter,
+    ) -> Instruction<RelativeId> {
         match self {
             Self::True => Instruction::OpConstantTrue {
                 result_type: ctx.type_id::<Bool>(),
@@ -1021,7 +1218,7 @@ pub trait ShaderExpression: core::fmt::Debug {
     type Output: Type;
 
     /// returns resulting id of the expression
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id;
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId;
 
     fn into_action(self) -> ShaderExpressionAction<Self>
     where
@@ -1045,6 +1242,15 @@ pub trait ShaderExpression: core::fmt::Debug {
         Self::Output: TypeAddRelation<Right::Output>,
     {
         Add(self, right)
+    }
+
+    fn mul<Right>(self, right: Right) -> Mul<Self, Right>
+    where
+        Self: Sized,
+        Right: ShaderExpression,
+        Self::Output: TypeMulRelation<Right::Output>,
+    {
+        Mul(self, right)
     }
 
     fn cast<T>(self) -> Cast<T, Self>
@@ -1093,26 +1299,46 @@ pub trait ShaderExpression: core::fmt::Debug {
         VectorSwizzle4(self, core::marker::PhantomData)
     }
 }
-
 impl<T: ShaderExpression> ShaderExpression for Rc<T> {
     type Output = T::Output;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         T::emit(&self, ctx)
     }
 }
 impl<T: ShaderExpression> ShaderExpression for Arc<T> {
     type Output = T::Output;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         T::emit(&self, ctx)
+    }
+}
+
+pub trait ShaderRefExpression: ShaderExpression {
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId;
+
+    fn store<V: ShaderExpression<Output = Self::Output>>(self, value: V) -> Store<Self, V>
+    where
+        Self: Sized,
+    {
+        Store(self, value)
+    }
+}
+impl<T: ShaderRefExpression> ShaderRefExpression for Rc<T> {
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        T::emit_pointer(&self, ctx)
+    }
+}
+impl<T: ShaderRefExpression> ShaderRefExpression for Arc<T> {
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        T::emit_pointer(&self, ctx)
     }
 }
 
 pub trait ShaderExpressionList: core::fmt::Debug {
     type Type: TypeList;
 
-    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<Id>;
+    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<RelativeId>;
 }
 impl<T> ShaderExpressionList for (T,)
 where
@@ -1120,7 +1346,7 @@ where
 {
     type Type = (T::Output,);
 
-    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<Id> {
+    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<RelativeId> {
         vec![self.0.emit(ctx)]
     }
 }
@@ -1131,7 +1357,7 @@ where
 {
     type Type = (A::Output, B::Output);
 
-    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<Id> {
+    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<RelativeId> {
         vec![self.0.emit(ctx), self.1.emit(ctx)]
     }
 }
@@ -1143,7 +1369,7 @@ where
 {
     type Type = (A::Output, B::Output, C::Output);
 
-    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<Id> {
+    fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<RelativeId> {
         vec![self.0.emit(ctx), self.1.emit(ctx), self.2.emit(ctx)]
     }
 }
@@ -1164,7 +1390,7 @@ impl BuiltinRef for GlobalInvocationIdRef {
 impl ShaderExpression for GlobalInvocationIdRef {
     type Output = Uint3;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let vid = ctx.builtin_var_id::<Self>();
         let rty = ctx.type_id::<Self::Output>();
 
@@ -1188,7 +1414,7 @@ where
 {
     type Output = <<Source::Output as ImageLoadable>::SampledType as VectorTypeFamily>::Vector4;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit(ctx);
         let loc = self.1.emit(ctx);
         let result_ty = ctx.type_id::<Self::Output>();
@@ -1386,7 +1612,7 @@ impl<T: DescriptorType> DescriptorRef<T> {
 impl<T: DescriptorType> ShaderExpression for DescriptorRef<T> {
     type Output = T;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let did = ctx.descriptor_var_id(&self);
         let rty = ctx.type_id::<T>();
 
@@ -1416,15 +1642,20 @@ impl<T: DescriptorType> DescriptorRef<T> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct LocationRef<T: Type>(u32, core::marker::PhantomData<T>);
-impl<T: Type> ShaderExpression for LocationRef<T> {
+pub struct LocationRef<T: Type, S: StorageClassMarker>(u32, core::marker::PhantomData<(T, S)>);
+impl<T: Type, S: StorageClassMarker> ShaderExpression for LocationRef<T, S> {
     type Output = T;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let vid = ctx.location_var_id::<T, S>(self.0);
         let tid = ctx.type_id::<T>();
 
-        // TODO: emit instruction
-        0
+        ctx.load(tid, vid)
+    }
+}
+impl<T: Type> ShaderRefExpression for LocationRef<T, OutputStorage> {
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        ctx.location_var_id::<T, OutputStorage>(self.0)
     }
 }
 
@@ -1470,7 +1701,7 @@ where
 {
     type Output = T;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let source = self.0.emit(ctx);
 
         match <Source::Output as CastableTo<T>>::STRATEGY {
@@ -1497,13 +1728,13 @@ impl<
 {
     type Output = R;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let callable = self.0.emit(ctx);
         let args = self.1.emit_all(ctx);
         let result_ty = ctx.type_id::<R>();
 
         // TODO: emit instruction
-        0
+        RelativeId::Main(0)
     }
 }
 
@@ -1515,11 +1746,27 @@ where
 {
     type Output = <Left::Output as TypeAddRelation<Right::Output>>::Output;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let lhs = self.0.emit(ctx);
         let rhs = self.1.emit(ctx);
 
         <Left::Output as TypeAddRelation<Right::Output>>::emit(lhs, rhs, ctx)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Mul<Left: ShaderExpression, Right: ShaderExpression>(Left, Right);
+impl<Left: ShaderExpression, Right: ShaderExpression> ShaderExpression for Mul<Left, Right>
+where
+    Left::Output: TypeMulRelation<Right::Output>,
+{
+    type Output = <Left::Output as TypeMulRelation<Right::Output>>::Output;
+
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let lhs = self.0.emit(ctx);
+        let rhs = self.1.emit(ctx);
+
+        <Left::Output as TypeMulRelation<Right::Output>>::emit(lhs, rhs, ctx)
     }
 }
 
@@ -1573,20 +1820,37 @@ where
 {
     type Output = <Source::Output as VectorType>::Element;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit(ctx);
 
         // Note: never identical (vector-type <> scalar-type)
 
         let rty = ctx.type_id::<Self::Output>();
-        ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
+        ctx.pure_result_instruction(PureResultInstruction::OpCompositeExtract {
             result_type: rty,
-            vector1: src,
-            vector2: src,
-            components: vec![E::INDEX],
+            composite: src,
+            indexes: vec![E::INDEX],
         })
     }
 }
+impl<Source: ShaderRefExpression, E: VectorElementOf<Source::Output>> ShaderRefExpression
+    for VectorSwizzle1<Source, E>
+where
+    Source::Output: VectorType,
+{
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let src = self.0.emit_pointer(ctx);
+        let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpAccessChain {
+            result_type: rty,
+            base: src,
+            indexes: vec![e1],
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VectorSwizzle2<
     Source: ShaderExpression,
@@ -1604,7 +1868,7 @@ where
 {
     type Output = <<Source::Output as VectorType>::Element as VectorTypeFamily>::Vector2;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit(ctx);
 
         if <Self::Output as Type>::id() == <Source::Output as Type>::id()
@@ -1623,6 +1887,29 @@ where
         })
     }
 }
+impl<
+        Source: ShaderRefExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+    > ShaderRefExpression for VectorSwizzle2<Source, E, E2>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let src = self.0.emit_pointer(ctx);
+        let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
+        let e2 = ctx.constant_id(Constant::Uint(E2::INDEX));
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpAccessChain {
+            result_type: rty,
+            base: src,
+            indexes: vec![e1, e2],
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VectorSwizzle3<
     Source: ShaderExpression,
@@ -1642,7 +1929,7 @@ where
 {
     type Output = <<Source::Output as VectorType>::Element as VectorTypeFamily>::Vector3;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit(ctx);
 
         if <Self::Output as Type>::id() == <Source::Output as Type>::id()
@@ -1661,6 +1948,31 @@ where
         })
     }
 }
+impl<
+        Source: ShaderRefExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+        E3: VectorElementOf<Source::Output>,
+    > ShaderRefExpression for VectorSwizzle3<Source, E, E2, E3>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let src = self.0.emit_pointer(ctx);
+        let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
+        let e2 = ctx.constant_id(Constant::Uint(E2::INDEX));
+        let e3 = ctx.constant_id(Constant::Uint(E3::INDEX));
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpAccessChain {
+            result_type: rty,
+            base: src,
+            indexes: vec![e1, e2, e3],
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VectorSwizzle4<
     Source: ShaderExpression,
@@ -1682,7 +1994,7 @@ where
 {
     type Output = <<Source::Output as VectorType>::Element as VectorTypeFamily>::Vector4;
 
-    fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit(ctx);
 
         if <Self::Output as Type>::id() == <Source::Output as Type>::id()
@@ -1701,22 +2013,80 @@ where
         })
     }
 }
+impl<
+        Source: ShaderRefExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+        E3: VectorElementOf<Source::Output>,
+        E4: VectorElementOf<Source::Output>,
+    > ShaderRefExpression for VectorSwizzle4<Source, E, E2, E3, E4>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let src = self.0.emit_pointer(ctx);
+        let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
+        let e2 = ctx.constant_id(Constant::Uint(E2::INDEX));
+        let e3 = ctx.constant_id(Constant::Uint(E3::INDEX));
+        let e4 = ctx.constant_id(Constant::Uint(E4::INDEX));
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpAccessChain {
+            result_type: rty,
+            base: src,
+            indexes: vec![e1, e2, e3, e4],
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Store<Dest: ShaderRefExpression, Value: ShaderExpression>(Dest, Value);
+impl<
+        Dest: ShaderRefExpression,
+        Value: ShaderExpression<Output = <Dest as ShaderExpression>::Output>,
+    > ShaderAction for Store<Dest, Value>
+{
+    fn emit(&self, ctx: &mut InstructionEmitter) {
+        let dst = self.0.emit_pointer(ctx);
+        let value = self.1.emit(ctx);
+
+        ctx.store(dst, value);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelativeId {
+    Head(u32),
+    Variable(u32),
+    Main(u32),
+}
+impl RelativeId {
+    pub fn relocate(self, head_base: u32, variables_base: u32, main_base: u32) -> Id {
+        match self {
+            Self::Head(x) => x + head_base,
+            Self::Variable(x) => x + variables_base,
+            Self::Main(x) => x + main_base,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct InstructionEmitter {
-    head_slots: Vec<Instruction>,
+    head_slots: Vec<Instruction<RelativeId>>,
     head_id_top: Id,
     types: HashMap<TypeId, Id>,
     constants: HashMap<Constant, Id>,
-    variable_slots: Vec<Instruction>,
+    variable_slots: Vec<Instruction<RelativeId>>,
     variable_id_top: Id,
     descriptor_variables: HashMap<DescriptorRefKey, Id>,
     builtin_variables: HashMap<Builtin, Id>,
-    entrypoint_interface_var_ids: Vec<Id>,
-    main_instructions: Vec<Instruction>,
+    location_variables: HashMap<(StorageClass, u32), Id>,
+    entrypoint_interface_var_ids: Vec<RelativeId>,
+    main_instructions: Vec<Instruction<RelativeId>>,
     main_instruction_ret_id_top: Id,
-    load_cache: HashMap<(Id, Id), Id>,
-    pure_result_cache: HashMap<PureResultInstruction, Id>,
+    load_cache: HashMap<RelativeId, HashMap<RelativeId, RelativeId>>,
+    pure_result_cache: HashMap<PureResultInstruction<RelativeId>, RelativeId>,
 }
 impl InstructionEmitter {
     pub fn new() -> Self {
@@ -1729,6 +2099,7 @@ impl InstructionEmitter {
             variable_id_top: 0,
             descriptor_variables: HashMap::new(),
             builtin_variables: HashMap::new(),
+            location_variables: HashMap::new(),
             entrypoint_interface_var_ids: Vec::new(),
             main_instructions: Vec::new(),
             main_instruction_ret_id_top: 0,
@@ -1737,48 +2108,48 @@ impl InstructionEmitter {
         }
     }
 
-    pub fn type_id<T: Type>(&mut self) -> Id {
+    pub fn type_id<T: Type>(&mut self) -> RelativeId {
         self.type_id_of_val(T::id())
     }
 
-    pub fn type_id_of_val(&mut self, id: TypeId) -> Id {
-        if !self.types.contains_key(&id) {
+    pub fn type_id_of_val(&mut self, id: TypeId) -> RelativeId {
+        RelativeId::Head(if !self.types.contains_key(&id) {
             let tid = self.head_id_top;
             self.head_id_top += 1;
-            let inst = id.make_instruction(tid, self);
+            let inst = id.make_instruction(RelativeId::Head(tid), self);
             self.head_slots.push(inst);
 
             self.types.insert(id, tid);
             tid
         } else {
             self.types[&id]
-        }
+        })
     }
 
-    pub fn constant_id(&mut self, c: Constant) -> Id {
-        if !self.constants.contains_key(&c) {
+    pub fn constant_id(&mut self, c: Constant) -> RelativeId {
+        RelativeId::Head(if !self.constants.contains_key(&c) {
             let cid = self.head_id_top;
             self.head_id_top += 1;
-            let inst = c.make_instruction(cid, self);
+            let inst = c.make_instruction(RelativeId::Head(cid), self);
             self.head_slots.push(inst);
 
             self.constants.insert(c, cid);
             cid
         } else {
             self.constants[&c]
-        }
+        })
     }
 
-    pub fn descriptor_var_id<T: DescriptorType>(&mut self, d: &DescriptorRef<T>) -> Id {
+    pub fn descriptor_var_id<T: DescriptorType>(&mut self, d: &DescriptorRef<T>) -> RelativeId {
         let dk = d.make_key();
 
-        if !self.descriptor_variables.contains_key(&dk) {
+        RelativeId::Variable(if !self.descriptor_variables.contains_key(&dk) {
             let did = self.variable_id_top;
             self.variable_id_top += 1;
             let ty = self.type_id::<UniformConstantPointer<T>>();
             self.variable_slots.push(Instruction::OpVariable {
                 result_type: ty,
-                result: did,
+                result: RelativeId::Variable(did),
                 storage_class: StorageClass::UniformConstant,
                 initializer: None,
             });
@@ -1787,19 +2158,19 @@ impl InstructionEmitter {
             did
         } else {
             self.descriptor_variables[&dk]
-        }
+        })
     }
 
-    pub fn builtin_var_id<R: BuiltinRef>(&mut self) -> Id {
+    pub fn builtin_var_id<R: BuiltinRef>(&mut self) -> RelativeId {
         let key = R::ID;
 
-        if !self.builtin_variables.contains_key(&key) {
+        RelativeId::Variable(if !self.builtin_variables.contains_key(&key) {
             let bid = self.variable_id_top;
             self.variable_id_top += 1;
             let ty = self.type_id::<Pointer<R::ValueType, R::StorageClass>>();
             self.variable_slots.push(Instruction::OpVariable {
                 result_type: ty,
-                result: bid,
+                result: RelativeId::Variable(bid),
                 storage_class: <R::StorageClass>::VALUE,
                 initializer: None,
             });
@@ -1807,44 +2178,89 @@ impl InstructionEmitter {
             if <R::StorageClass>::VALUE == StorageClass::Input
                 || <R::StorageClass>::VALUE == StorageClass::Output
             {
-                self.entrypoint_interface_var_ids.push(bid);
+                self.entrypoint_interface_var_ids
+                    .push(RelativeId::Variable(bid));
             }
 
             self.builtin_variables.insert(key, bid);
             bid
         } else {
             self.builtin_variables[&key]
-        }
+        })
     }
 
-    pub fn alloc_ret_id(&mut self) -> Id {
+    pub fn location_var_id<T: Type, S: StorageClassMarker>(&mut self, location: u32) -> RelativeId {
+        let key = (S::VALUE, location);
+
+        if let Some(id) = self.location_variables.get(&key) {
+            return RelativeId::Variable(*id);
+        }
+
+        let id = self.variable_id_top;
+        self.variable_id_top += 1;
+        let ty = self.type_id::<Pointer<T, S>>();
+        self.variable_slots.push(Instruction::OpVariable {
+            result_type: ty,
+            result: RelativeId::Variable(id),
+            storage_class: S::VALUE,
+            initializer: None,
+        });
+
+        if S::VALUE == StorageClass::Input || S::VALUE == StorageClass::Output {
+            self.entrypoint_interface_var_ids
+                .push(RelativeId::Variable(id));
+        }
+
+        self.location_variables.insert(key, id);
+        RelativeId::Variable(id)
+    }
+
+    pub fn alloc_ret_id(&mut self) -> RelativeId {
         let id = self.main_instruction_ret_id_top;
         self.main_instruction_ret_id_top += 1;
+
+        RelativeId::Main(id)
+    }
+
+    pub fn load(&mut self, result_type: RelativeId, pointer: RelativeId) -> RelativeId {
+        if let Some(c) = self.load_cache.get(&pointer) {
+            if let Some(preloaded) = c.get(&result_type) {
+                return *preloaded;
+            }
+        }
+
+        let id = self.alloc_ret_id();
+        let inst = Instruction::OpLoad {
+            result_type,
+            result: id,
+            pointer,
+            memory_operands: None,
+        };
+        self.add_main_instruction(inst);
+        self.load_cache
+            .entry(pointer)
+            .or_insert_with(HashMap::new)
+            .insert(result_type, id);
 
         id
     }
 
-    pub fn load(&mut self, result_type: Id, pointer: Id) -> Id {
-        let key = (result_type, pointer);
+    pub fn store(&mut self, dest_ptr: RelativeId, value: RelativeId) {
+        self.add_main_instruction(Instruction::OpStore {
+            pointer: dest_ptr,
+            object: value,
+            memory_operands: None,
+        });
 
-        if !self.load_cache.contains_key(&key) {
-            let id = self.alloc_ret_id();
-            let inst = Instruction::OpLoad {
-                result_type,
-                result: id,
-                pointer,
-                memory_operands: None,
-            };
-            self.add_main_instruction(inst);
-            self.load_cache.insert(key, id);
-
-            id
-        } else {
-            self.load_cache[&key]
-        }
+        // TODO: AccessChainを考慮できてないので改修が必要
+        // evict preloaded cache
+        self.load_cache.remove(&dest_ptr);
     }
 
-    pub fn pure_result_instruction(&mut self, instruction: PureResultInstruction) -> Id {
+    pub fn pure_result_instruction(
+        &mut self,
+        instruction: PureResultInstruction<RelativeId>,
+    ) -> RelativeId {
         if !self.pure_result_cache.contains_key(&instruction) {
             let rid = self.alloc_ret_id();
             self.add_main_instruction(Instruction::PureResult(rid, instruction.clone()));
@@ -1856,12 +2272,12 @@ impl InstructionEmitter {
         }
     }
 
-    pub fn add_main_instruction(&mut self, instruction: Instruction) {
+    pub fn add_main_instruction(&mut self, instruction: Instruction<RelativeId>) {
         self.main_instructions.push(instruction);
     }
 
     /// (entrypoint_id, interface_ids, instructions, bound)
-    pub fn serialize_instructions(mut self) -> (Id, Vec<Id>, Vec<Instruction>, Id) {
+    pub fn serialize_instructions(mut self) -> (Id, Vec<Id>, Vec<Instruction<Id>>, Id) {
         let main_return_type_id = self.type_id::<Void>();
         let main_fn_type_id = self.type_id::<CallableType<(), Void>>();
 
@@ -1875,6 +2291,7 @@ impl InstructionEmitter {
         let mut serialized = Vec::with_capacity(
             self.builtin_variables.len()
                 + self.descriptor_variables.len() * 2
+                + self.location_variables.len()
                 + self.head_slots.len()
                 + self.variable_slots.len()
                 + self.main_instructions.len()
@@ -1899,29 +2316,32 @@ impl InstructionEmitter {
 
             instructions
         }));
+        serialized.extend(self.location_variables.into_iter().map(|((_, l), lid)| {
+            Instruction::OpDecorate(lid + variables_base, Decoration::Location(l))
+        }));
         serialized.extend(
             self.head_slots
                 .into_iter()
-                .map(|x| Self::translate_ids(x, head_base, variables_base, main_base)),
+                .map(|x| Self::relocate_ids(x, head_base, variables_base, main_base)),
         );
         serialized.extend(
             self.variable_slots
                 .into_iter()
-                .map(|x| Self::translate_ids(x, head_base, variables_base, main_base)),
+                .map(|x| Self::relocate_ids(x, head_base, variables_base, main_base)),
         );
         serialized.extend([
             Instruction::OpFunction {
-                result_type: main_return_type_id + head_base,
+                result_type: main_return_type_id.relocate(head_base, variables_base, main_base),
                 result: entrypoint_id,
                 control: FunctionControl::NONE,
-                r#type: main_fn_type_id + head_base,
+                r#type: main_fn_type_id.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpLabel(entrypoint_id + 1),
         ]);
         serialized.extend(
             self.main_instructions
                 .into_iter()
-                .map(|x| Self::translate_ids(x, head_base, variables_base, main_base)),
+                .map(|x| Self::relocate_ids(x, head_base, variables_base, main_base)),
         );
         serialized.extend([Instruction::OpReturn, Instruction::OpFunctionEnd]);
 
@@ -1929,23 +2349,25 @@ impl InstructionEmitter {
             entrypoint_id,
             self.entrypoint_interface_var_ids
                 .into_iter()
-                .map(|x| x + variables_base)
+                .map(|x| x.relocate(head_base, variables_base, main_base))
                 .collect(),
             serialized,
             bound,
         )
     }
 
-    fn translate_ids(
-        inst: Instruction,
+    fn relocate_ids(
+        inst: Instruction<RelativeId>,
         head_base: u32,
         variables_base: u32,
         main_base: u32,
-    ) -> Instruction {
+    ) -> Instruction<Id> {
         match inst {
             Instruction::OpCapability(c) => Instruction::OpCapability(c),
             Instruction::OpMemoryModel(a, m) => Instruction::OpMemoryModel(a, m),
-            Instruction::OpDecorate(a, b) => Instruction::OpDecorate(a, b),
+            Instruction::OpDecorate(a, b) => {
+                Instruction::OpDecorate(a.relocate(head_base, variables_base, main_base), b)
+            }
             Instruction::OpEntryPoint {
                 execution_model,
                 func_id,
@@ -1953,29 +2375,44 @@ impl InstructionEmitter {
                 interface,
             } => Instruction::OpEntryPoint {
                 execution_model,
-                func_id,
+                func_id: func_id.relocate(head_base, variables_base, main_base),
                 name,
-                interface,
+                interface: interface
+                    .into_iter()
+                    .map(|x| x.relocate(head_base, variables_base, main_base))
+                    .collect(),
             },
-            Instruction::OpExecutionMode(a, b) => Instruction::OpExecutionMode(a, b),
-            Instruction::OpTypeVoid(r) => Instruction::OpTypeVoid(r + head_base),
-            Instruction::OpTypeBool(r) => Instruction::OpTypeBool(r + head_base),
+            Instruction::OpExecutionMode(a, b) => {
+                Instruction::OpExecutionMode(a.relocate(head_base, variables_base, main_base), b)
+            }
+            Instruction::OpTypeVoid(r) => {
+                Instruction::OpTypeVoid(r.relocate(head_base, variables_base, main_base))
+            }
+            Instruction::OpTypeBool(r) => {
+                Instruction::OpTypeBool(r.relocate(head_base, variables_base, main_base))
+            }
             Instruction::OpTypeInt {
                 result,
                 bits,
                 signed,
             } => Instruction::OpTypeInt {
-                result: result + head_base,
+                result: result.relocate(head_base, variables_base, main_base),
                 bits,
                 signed,
             },
-            Instruction::OpTypeFloat(r, b) => Instruction::OpTypeFloat(r + head_base, b),
-            Instruction::OpTypeVector(r, e, n) => {
-                Instruction::OpTypeVector(r + head_base, e + head_base, n)
+            Instruction::OpTypeFloat(r, b) => {
+                Instruction::OpTypeFloat(r.relocate(head_base, variables_base, main_base), b)
             }
-            Instruction::OpTypeMatrix(r, c, cn) => {
-                Instruction::OpTypeMatrix(r + head_base, c + head_base, cn)
-            }
+            Instruction::OpTypeVector(r, e, n) => Instruction::OpTypeVector(
+                r.relocate(head_base, variables_base, main_base),
+                e.relocate(head_base, variables_base, main_base),
+                n,
+            ),
+            Instruction::OpTypeMatrix(r, c, cn) => Instruction::OpTypeMatrix(
+                r.relocate(head_base, variables_base, main_base),
+                c.relocate(head_base, variables_base, main_base),
+                cn,
+            ),
             Instruction::OpTypeImage {
                 result,
                 sampled_type,
@@ -1987,8 +2424,8 @@ impl InstructionEmitter {
                 format,
                 qualifier,
             } => Instruction::OpTypeImage {
-                result: result + head_base,
-                sampled_type: sampled_type + head_base,
+                result: result.relocate(head_base, variables_base, main_base),
+                sampled_type: sampled_type.relocate(head_base, variables_base, main_base),
                 dim,
                 depth,
                 arrayed,
@@ -1997,11 +2434,13 @@ impl InstructionEmitter {
                 format,
                 qualifier,
             },
-            Instruction::OpTypeSampler(r) => Instruction::OpTypeSampler(r + head_base),
+            Instruction::OpTypeSampler(r) => {
+                Instruction::OpTypeSampler(r.relocate(head_base, variables_base, main_base))
+            }
             Instruction::OpTypeSampledImage { result, image_type } => {
                 Instruction::OpTypeSampledImage {
-                    result: result + head_base,
-                    image_type: image_type + head_base,
+                    result: result.relocate(head_base, variables_base, main_base),
+                    image_type: image_type.relocate(head_base, variables_base, main_base),
                 }
             }
             Instruction::OpTypeArray {
@@ -2009,62 +2448,59 @@ impl InstructionEmitter {
                 element_type,
                 length_expr,
             } => Instruction::OpTypeArray {
-                result: result + head_base,
-                element_type: element_type + head_base,
-                length_expr: length_expr + head_base,
+                result: result.relocate(head_base, variables_base, main_base),
+                element_type: element_type.relocate(head_base, variables_base, main_base),
+                length_expr: length_expr.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpTypeRuntimeArray {
                 result,
                 element_type,
             } => Instruction::OpTypeRuntimeArray {
-                result: result + head_base,
-                element_type: element_type + head_base,
+                result: result.relocate(head_base, variables_base, main_base),
+                element_type: element_type.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpTypePointer {
                 result,
                 storage_class,
                 r#type,
             } => Instruction::OpTypePointer {
-                result: result + head_base,
+                result: result.relocate(head_base, variables_base, main_base),
                 storage_class,
-                r#type: r#type + head_base,
+                r#type: r#type.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpTypeFunction {
                 result,
                 return_type,
-                mut parameter_types,
-            } => {
-                for v in parameter_types.iter_mut() {
-                    *v += head_base;
-                }
-
-                Instruction::OpTypeFunction {
-                    result: result + head_base,
-                    return_type: return_type + head_base,
-                    parameter_types: parameter_types,
-                }
-            }
+                parameter_types,
+            } => Instruction::OpTypeFunction {
+                result: result.relocate(head_base, variables_base, main_base),
+                return_type: return_type.relocate(head_base, variables_base, main_base),
+                parameter_types: parameter_types
+                    .into_iter()
+                    .map(|x| x.relocate(head_base, variables_base, main_base))
+                    .collect(),
+            },
             Instruction::OpConstantTrue {
                 result_type,
                 result,
             } => Instruction::OpConstantTrue {
-                result_type: result_type + head_base,
-                result: result + head_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpConstantFalse {
                 result_type,
                 result,
             } => Instruction::OpConstantFalse {
-                result_type: result_type + head_base,
-                result: result + head_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpConstant {
                 result_type,
                 result,
                 value,
             } => Instruction::OpConstant {
-                result_type: result_type + head_base,
-                result: result + head_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
                 value,
             },
             Instruction::OpConstantComposite {
@@ -2072,9 +2508,12 @@ impl InstructionEmitter {
                 result,
                 consituents,
             } => Instruction::OpConstantComposite {
-                result_type: result_type + head_base,
-                result: result + head_base,
-                consituents,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
+                consituents: consituents
+                    .into_iter()
+                    .map(|x| x.relocate(head_base, variables_base, main_base))
+                    .collect(),
             },
             Instruction::OpConstantSampler {
                 result_type,
@@ -2083,8 +2522,8 @@ impl InstructionEmitter {
                 normalized,
                 filter,
             } => Instruction::OpConstantSampler {
-                result_type: result_type + head_base,
-                result: result + head_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
                 addressing,
                 normalized,
                 filter,
@@ -2093,25 +2532,25 @@ impl InstructionEmitter {
                 result_type,
                 result,
             } => Instruction::OpConstantNull {
-                result_type: result_type + head_base,
-                result: result + head_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
             },
             Instruction::PureResult(result, p) => Instruction::PureResult(
-                result + main_base,
+                result.relocate(head_base, variables_base, main_base),
                 match p {
                     PureResultInstruction::OpConvertFToS {
                         result_type,
                         float_value,
                     } => PureResultInstruction::OpConvertFToS {
-                        result_type: result_type + head_base,
-                        float_value: float_value + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        float_value: float_value.relocate(head_base, variables_base, main_base),
                     },
                     PureResultInstruction::OpBitcast {
                         result_type,
                         operand,
                     } => PureResultInstruction::OpBitcast {
-                        result_type: result_type + head_base,
-                        operand: operand + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        operand: operand.relocate(head_base, variables_base, main_base),
                     },
                     PureResultInstruction::OpVectorShuffle {
                         result_type,
@@ -2119,9 +2558,9 @@ impl InstructionEmitter {
                         vector2,
                         components,
                     } => PureResultInstruction::OpVectorShuffle {
-                        result_type: result_type + head_base,
-                        vector1: vector1 + main_base,
-                        vector2: vector2 + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        vector1: vector1.relocate(head_base, variables_base, main_base),
+                        vector2: vector2.relocate(head_base, variables_base, main_base),
                         components,
                     },
                     PureResultInstruction::OpCompositeExtract {
@@ -2129,8 +2568,8 @@ impl InstructionEmitter {
                         composite,
                         indexes,
                     } => PureResultInstruction::OpCompositeExtract {
-                        result_type: result_type + head_base,
-                        composite: composite + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        composite: composite.relocate(head_base, variables_base, main_base),
                         indexes,
                     },
                     PureResultInstruction::OpIAdd {
@@ -2138,18 +2577,39 @@ impl InstructionEmitter {
                         operand1,
                         operand2,
                     } => PureResultInstruction::OpIAdd {
-                        result_type: result_type + head_base,
-                        operand1: operand1 + main_base,
-                        operand2: operand2 + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        operand1: operand1.relocate(head_base, variables_base, main_base),
+                        operand2: operand2.relocate(head_base, variables_base, main_base),
                     },
                     PureResultInstruction::OpFAdd {
                         result_type,
                         operand1,
                         operand2,
                     } => PureResultInstruction::OpFAdd {
-                        result_type: result_type + head_base,
-                        operand1: operand1 + main_base,
-                        operand2: operand2 + main_base,
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        operand1: operand1.relocate(head_base, variables_base, main_base),
+                        operand2: operand2.relocate(head_base, variables_base, main_base),
+                    },
+                    PureResultInstruction::OpVectorTimesScalar {
+                        result_type,
+                        vector,
+                        scalar,
+                    } => PureResultInstruction::OpVectorTimesScalar {
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        vector: vector.relocate(head_base, variables_base, main_base),
+                        scalar: scalar.relocate(head_base, variables_base, main_base),
+                    },
+                    PureResultInstruction::OpAccessChain {
+                        result_type,
+                        base,
+                        indexes,
+                    } => PureResultInstruction::OpAccessChain {
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        base: base.relocate(head_base, variables_base, main_base),
+                        indexes: indexes
+                            .into_iter()
+                            .map(|x| x.relocate(head_base, variables_base, main_base))
+                            .collect(),
                     },
                 },
             ),
@@ -2160,10 +2620,10 @@ impl InstructionEmitter {
                 coordinate,
                 operands,
             } => Instruction::OpImageRead {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                image: image + main_base,
-                coordinate: coordinate + main_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
+                image: image.relocate(head_base, variables_base, main_base),
+                coordinate: coordinate.relocate(head_base, variables_base, main_base),
                 operands,
             },
             Instruction::OpImageWrite {
@@ -2172,36 +2632,40 @@ impl InstructionEmitter {
                 texel,
                 operands,
             } => Instruction::OpImageWrite {
-                image: image + main_base,
-                coordinate: coordinate + main_base,
-                texel: texel + main_base,
+                image: image.relocate(head_base, variables_base, main_base),
+                coordinate: coordinate.relocate(head_base, variables_base, main_base),
+                texel: texel.relocate(head_base, variables_base, main_base),
                 operands,
             },
             Instruction::OpReturn => Instruction::OpReturn,
-            Instruction::OpReturnValue(v) => Instruction::OpReturnValue(v + main_base),
+            Instruction::OpReturnValue(v) => {
+                Instruction::OpReturnValue(v.relocate(head_base, variables_base, main_base))
+            }
             Instruction::OpFunction {
                 result_type,
                 result,
                 control,
                 r#type,
             } => Instruction::OpFunction {
-                result_type: result_type + head_base,
-                result: result + main_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
                 control,
-                r#type: r#type + head_base,
+                r#type: r#type.relocate(head_base, variables_base, main_base),
             },
             Instruction::OpFunctionEnd => Instruction::OpFunctionEnd,
-            Instruction::OpLabel(r) => Instruction::OpLabel(r + main_base),
+            Instruction::OpLabel(r) => {
+                Instruction::OpLabel(r.relocate(head_base, variables_base, main_base))
+            }
             Instruction::OpVariable {
                 result_type,
                 result,
                 storage_class,
                 initializer,
             } => Instruction::OpVariable {
-                result_type: result_type + head_base,
-                result: result + variables_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
                 storage_class,
-                initializer,
+                initializer: initializer.map(|x| x.relocate(head_base, variables_base, main_base)),
             },
             Instruction::OpLoad {
                 result_type,
@@ -2209,9 +2673,18 @@ impl InstructionEmitter {
                 pointer,
                 memory_operands,
             } => Instruction::OpLoad {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                pointer: pointer + variables_base,
+                result_type: result_type.relocate(head_base, variables_base, main_base),
+                result: result.relocate(head_base, variables_base, main_base),
+                pointer: pointer.relocate(head_base, variables_base, main_base),
+                memory_operands,
+            },
+            Instruction::OpStore {
+                pointer,
+                object,
+                memory_operands,
+            } => Instruction::OpStore {
+                pointer: pointer.relocate(head_base, variables_base, main_base),
+                object: object.relocate(head_base, variables_base, main_base),
                 memory_operands,
             },
         }
@@ -2221,6 +2694,7 @@ impl InstructionEmitter {
 fn main() -> std::io::Result<()> {
     csh_accum2().export_module("accum2.spv")?;
     csh_accum3().export_module("accum3.spv")?;
+    vertex_color_f().export_module("vertex_color_f.spv")?;
 
     Ok(())
 }
@@ -2251,4 +2725,12 @@ fn csh_accum3() -> ComputeShader<impl ShaderAction> {
     let v = src.load(p.clone()).add(dst.load(p.clone()));
 
     ctx.combine_actions(dst.store(p, v))
+}
+
+fn vertex_color_f() -> FragmentShader<impl ShaderAction> {
+    let mut ctx = FragmentShaderContext::new();
+    let out = ctx.output_location::<Float4>(0);
+    let vcol = ctx.input_location::<Float4>(0);
+
+    ctx.combine_action(out.store(vcol.mul(vcol.swizzle1(VectorElementW))))
 }
