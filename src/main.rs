@@ -169,16 +169,9 @@ pub struct ComputeShader<Actions: ShaderAction> {
     actions: Actions,
 }
 impl<Actions: ShaderAction> ComputeShader<Actions> {
-    fn emit(&self, ctx: &mut InstructionEmitter) {
-        self.actions.emit(ctx);
-    }
-
-    pub fn export_module(
-        &self,
-        path: &(impl AsRef<std::path::Path> + ?Sized),
-    ) -> std::io::Result<()> {
+    pub fn emit_word_stream(&self) -> Vec<u32> {
         let mut ctx = InstructionEmitter::new();
-        self.emit(&mut ctx);
+        self.actions.emit(&mut ctx);
         let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
         let mut serialized = Vec::with_capacity(3 + serialized1.len());
         serialized.extend([
@@ -201,17 +194,26 @@ impl<Actions: ShaderAction> ComputeShader<Actions> {
         ]);
         serialized.extend(serialized1);
 
+        let mut word_stream = Vec::new();
+        word_stream.extend(ModuleBinaryHeader::new(1, 0, 0, bound).into_words());
+        for x in serialized {
+            x.encode(&mut word_stream);
+        }
+
+        word_stream
+    }
+
+    pub fn export_module(
+        &self,
+        path: &(impl AsRef<std::path::Path> + ?Sized),
+    ) -> std::io::Result<()> {
+        let word_stream = self.emit_word_stream();
+
         let mut module = std::fs::File::options()
             .create(true)
             .write(true)
             .truncate(true)
             .open(path)?;
-        let header = ModuleBinaryHeader::new(1, 0, 0, bound);
-        module.write_all(header.as_bytes())?;
-        let mut word_stream = Vec::new();
-        for x in serialized {
-            x.encode(&mut word_stream);
-        }
         module.write_all(unsafe {
             core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
         })
@@ -313,10 +315,7 @@ pub struct FragmentShader<Action: ShaderAction> {
     action: Action,
 }
 impl<Action: ShaderAction> FragmentShader<Action> {
-    pub fn export_module(
-        &self,
-        path: &(impl AsRef<std::path::Path> + ?Sized),
-    ) -> std::io::Result<()> {
+    pub fn emit_word_stream(&self) -> Vec<u32> {
         let mut ctx = InstructionEmitter::new();
         self.action.emit(&mut ctx);
         let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
@@ -340,17 +339,150 @@ impl<Action: ShaderAction> FragmentShader<Action> {
         ]);
         serialized.extend(serialized1);
 
+        let mut word_stream = Vec::new();
+        word_stream.extend(ModuleBinaryHeader::new(1, 0, 0, bound).into_words());
+        for x in serialized {
+            x.encode(&mut word_stream);
+        }
+
+        word_stream
+    }
+
+    pub fn export_module(
+        &self,
+        path: &(impl AsRef<std::path::Path> + ?Sized),
+    ) -> std::io::Result<()> {
+        let word_stream = self.emit_word_stream();
+
         let mut module = std::fs::File::options()
             .create(true)
             .write(true)
             .truncate(true)
             .open(path)?;
-        let header = ModuleBinaryHeader::new(1, 0, 0, bound);
-        module.write_all(header.as_bytes())?;
+        module.write_all(unsafe {
+            core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct VertexShaderContext {
+    inputs: ShaderInterface,
+}
+impl VertexShaderContext {
+    pub const fn new() -> Self {
+        Self {
+            inputs: ShaderInterface::new(),
+        }
+    }
+
+    pub fn descriptor<T: DescriptorType>(&mut self, set: u32, bound: u32) -> DescriptorRef<T> {
+        match self
+            .inputs
+            .descriptor_set_bounds
+            .entry(set)
+            .or_insert_with(BTreeMap::new)
+            .entry(bound)
+        {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::DEF);
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::DEF {
+                    panic!("descriptor type mismatch before bound");
+                }
+            }
+        }
+
+        DescriptorRef {
+            set,
+            bound,
+            _ph: core::marker::PhantomData,
+        }
+    }
+
+    pub fn input_location<T: Type>(&mut self, location: u32) -> LocationRef<T, InputStorage> {
+        match self.inputs.input_location_bounds.entry(location) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::id());
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::id() {
+                    panic!("location type mismatch before bound");
+                }
+            }
+        }
+
+        LocationRef(location, core::marker::PhantomData)
+    }
+
+    pub fn output_location<T: Type>(&mut self, location: u32) -> LocationRef<T, OutputStorage> {
+        match self.inputs.output_location_bounds.entry(location) {
+            std::collections::btree_map::Entry::Vacant(v) => {
+                v.insert(T::id());
+            }
+            std::collections::btree_map::Entry::Occupied(v) => {
+                if *v.get() != T::id() {
+                    panic!("location type mismatch before bound");
+                }
+            }
+        }
+
+        LocationRef(location, core::marker::PhantomData)
+    }
+
+    pub fn combine_action<Action: ShaderAction>(self, action: Action) -> VertexShader<Action> {
+        VertexShader {
+            inputs: self.inputs,
+            action,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VertexShader<Action: ShaderAction> {
+    #[allow(dead_code)]
+    inputs: ShaderInterface,
+    action: Action,
+}
+impl<Action: ShaderAction> VertexShader<Action> {
+    pub fn emit_word_stream(&self) -> Vec<u32> {
+        let mut ctx = InstructionEmitter::new();
+        self.action.emit(&mut ctx);
+        let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
+        let mut serialized = Vec::with_capacity(3 + serialized1.len());
+        serialized.extend([
+            Instruction::OpCapability(Capability::Shader),
+            Instruction::OpMemoryModel(AddressingModel::Logical, MemoryModel::GLSL450),
+            Instruction::OpEntryPoint {
+                execution_model: ExecutionModel::Vertex,
+                func_id: epid,
+                name: String::from("main"),
+                interface: interface_ids,
+            },
+        ]);
+        serialized.extend(serialized1);
+
         let mut word_stream = Vec::new();
+        word_stream.extend(ModuleBinaryHeader::new(1, 0, 0, bound).into_words());
         for x in serialized {
             x.encode(&mut word_stream);
         }
+
+        word_stream
+    }
+
+    pub fn export_module(
+        &self,
+        path: &(impl AsRef<std::path::Path> + ?Sized),
+    ) -> std::io::Result<()> {
+        let word_stream = self.emit_word_stream();
+
+        let mut module = std::fs::File::options()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
         module.write_all(unsafe {
             core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
         })

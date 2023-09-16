@@ -26,6 +26,10 @@ impl ModuleBinaryHeader {
         }
     }
 
+    pub fn into_words(self) -> [u32; 5] {
+        unsafe { core::mem::transmute(self) }
+    }
+
     pub fn as_bytes(&self) -> &[u8; 4 * 5] {
         unsafe { core::mem::transmute(self) }
     }
