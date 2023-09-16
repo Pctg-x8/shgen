@@ -314,6 +314,39 @@ impl core::ops::BitOrAssign for MemoryOperands {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub enum PureResultInstruction {
+    OpConvertFToS {
+        result_type: Id,
+        float_value: Id,
+    },
+    OpBitcast {
+        result_type: Id,
+        operand: Id,
+    },
+    OpVectorShuffle {
+        result_type: Id,
+        vector1: Id,
+        vector2: Id,
+        components: Vec<u32>,
+    },
+    OpCompositeExtract {
+        result_type: Id,
+        composite: Id,
+        indexes: Vec<u32>,
+    },
+    OpIAdd {
+        result_type: Id,
+        operand1: Id,
+        operand2: Id,
+    },
+    OpFAdd {
+        result_type: Id,
+        operand1: Id,
+        operand2: Id,
+    },
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum Instruction {
     OpCapability(Capability),
     OpMemoryModel(AddressingModel, MemoryModel),
@@ -399,44 +432,9 @@ pub enum Instruction {
         result_type: Id,
         result: ResultId,
     },
-    OpConvertFToS {
-        result_type: Id,
-        result: ResultId,
-        float_value: Id,
-    },
-    OpBitcast {
-        result_type: Id,
-        result: ResultId,
-        operand: Id,
-    },
-    OpVectorShuffle {
-        result_type: Id,
-        result: ResultId,
-        vector1: Id,
-        vector2: Id,
-        components: Vec<u32>,
-    },
-    OpCompositeExtract {
-        result_type: Id,
-        result: ResultId,
-        composite: Id,
-        indexes: Vec<u32>,
-    },
-    OpIAdd {
-        result_type: Id,
-        result: ResultId,
-        operand1: Id,
-        operand2: Id,
-    },
-    OpFAdd {
-        result_type: Id,
-        result: ResultId,
-        operand1: Id,
-        operand2: Id,
-    },
     OpImageRead {
         result_type: Id,
-        result: ResultId,
+        result: Id,
         image: Id,
         coordinate: Id,
         operands: Option<u32>, // TODO: operands
@@ -469,6 +467,7 @@ pub enum Instruction {
         pointer: Id,
         memory_operands: Option<MemoryOperands>,
     },
+    PureResult(ResultId, PureResultInstruction),
 }
 impl Instruction {
     pub fn encode(self, sink: &mut Vec<u32>) {
@@ -627,23 +626,29 @@ impl Instruction {
                 result_type,
                 result,
             } => sink.extend([instruction_word(3, 46), result_type, result]),
-            Self::OpConvertFToS {
-                result_type,
+            Self::PureResult(
                 result,
-                float_value,
-            } => sink.extend([instruction_word(4, 110), result_type, result, float_value]),
-            Self::OpBitcast {
-                result_type,
+                PureResultInstruction::OpConvertFToS {
+                    result_type,
+                    float_value,
+                },
+            ) => sink.extend([instruction_word(4, 110), result_type, result, float_value]),
+            Self::PureResult(
                 result,
-                operand,
-            } => sink.extend([instruction_word(4, 124), result_type, result, operand]),
-            Self::OpVectorShuffle {
-                result_type,
+                PureResultInstruction::OpBitcast {
+                    result_type,
+                    operand,
+                },
+            ) => sink.extend([instruction_word(4, 124), result_type, result, operand]),
+            Self::PureResult(
                 result,
-                vector1,
-                vector2,
-                components,
-            } => {
+                PureResultInstruction::OpVectorShuffle {
+                    result_type,
+                    vector1,
+                    vector2,
+                    components,
+                },
+            ) => {
                 sink.extend([
                     instruction_word(5 + components.len() as u16, 79),
                     result_type,
@@ -653,12 +658,14 @@ impl Instruction {
                 ]);
                 sink.extend(components);
             }
-            Self::OpCompositeExtract {
-                result_type,
+            Self::PureResult(
                 result,
-                composite,
-                indexes,
-            } => {
+                PureResultInstruction::OpCompositeExtract {
+                    result_type,
+                    composite,
+                    indexes,
+                },
+            ) => {
                 sink.extend([
                     instruction_word(4 + indexes.len() as u16, 81),
                     result_type,
@@ -667,24 +674,28 @@ impl Instruction {
                 ]);
                 sink.extend(indexes);
             }
-            Self::OpIAdd {
-                result_type,
+            Self::PureResult(
                 result,
-                operand1,
-                operand2,
-            } => sink.extend([
+                PureResultInstruction::OpIAdd {
+                    result_type,
+                    operand1,
+                    operand2,
+                },
+            ) => sink.extend([
                 instruction_word(5, 128),
                 result_type,
                 result,
                 operand1,
                 operand2,
             ]),
-            Self::OpFAdd {
-                result_type,
+            Self::PureResult(
                 result,
-                operand1,
-                operand2,
-            } => sink.extend([
+                PureResultInstruction::OpFAdd {
+                    result_type,
+                    operand1,
+                    operand2,
+                },
+            ) => sink.extend([
                 instruction_word(5, 129),
                 result_type,
                 result,

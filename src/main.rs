@@ -8,7 +8,7 @@ use std::{
 use spir::{
     AccessQualifier, Builtin, Decoration, ExecutionMode, ExecutionModel, FunctionControl, Id,
     ImageDepthFlag, ImageDimension, ImageFormat, ImageSamplingCompatibilityFlag, Instruction,
-    StorageClass,
+    PureResultInstruction, StorageClass,
 };
 
 use crate::spir::{AddressingModel, Capability, MemoryModel, ModuleBinaryHeader};
@@ -471,16 +471,13 @@ impl TypeAddRelation<Float> for Float {
     type Output = Float;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Float>();
 
-        ctx.add_main_instruction(Instruction::OpFAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 impl VectorTypeFamily for Float {
@@ -500,16 +497,13 @@ impl TypeAddRelation<Uint> for Uint {
     type Output = Uint;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Uint>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 impl VectorTypeFamily for Uint {
@@ -529,16 +523,13 @@ impl TypeAddRelation<Int> for Int {
     type Output = Int;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Int>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 impl VectorTypeFamily for Int {
@@ -561,16 +552,13 @@ impl TypeAddRelation<Float2> for Float2 {
     type Output = Float2;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Float2>();
 
-        ctx.add_main_instruction(Instruction::OpFAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -588,16 +576,13 @@ impl TypeAddRelation<Float3> for Float3 {
     type Output = Float3;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Float3>();
 
-        ctx.add_main_instruction(Instruction::OpFAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -615,16 +600,13 @@ impl TypeAddRelation<Float4> for Float4 {
     type Output = Float4;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Float4>();
 
-        ctx.add_main_instruction(Instruction::OpFAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpFAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -642,16 +624,13 @@ impl TypeAddRelation<Int2> for Int2 {
     type Output = Int2;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Int2>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -669,16 +648,13 @@ impl TypeAddRelation<Int3> for Int3 {
     type Output = Int3;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Int3>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -696,16 +672,13 @@ impl TypeAddRelation<Int4> for Int4 {
     type Output = Int4;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Int4>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -723,16 +696,13 @@ impl TypeAddRelation<Uint2> for Uint2 {
     type Output = Uint2;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Uint2>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -750,16 +720,13 @@ impl TypeAddRelation<Uint3> for Uint3 {
     type Output = Uint3;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Uint3>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -777,16 +744,13 @@ impl TypeAddRelation<Uint4> for Uint4 {
     type Output = Uint4;
 
     fn emit(left: Id, right: Id, ctx: &mut InstructionEmitter) -> Id {
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<Uint4>();
 
-        ctx.add_main_instruction(Instruction::OpIAdd {
+        ctx.pure_result_instruction(PureResultInstruction::OpIAdd {
             result_type: rty,
-            result: rid,
             operand1: left,
             operand2: right,
-        });
-        rid
+        })
     }
 }
 
@@ -1142,15 +1106,8 @@ impl ShaderExpression for GlobalInvocationIdRef {
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let vid = ctx.builtin_var_id::<Self>();
         let rty = ctx.type_id::<Self::Output>();
-        let rid = ctx.alloc_ret_id();
-        ctx.add_main_instruction(Instruction::OpLoad {
-            result_type: rty,
-            result: rid,
-            pointer: vid,
-            memory_operands: None,
-        });
 
-        rid
+        ctx.load(rty, vid)
     }
 }
 
@@ -1340,16 +1297,9 @@ impl<T: DescriptorType> ShaderExpression for DescriptorRef<T> {
 
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let did = ctx.descriptor_var_id(&self);
-
-        let rid = ctx.alloc_ret_id();
         let rty = ctx.type_id::<T>();
-        ctx.add_main_instruction(Instruction::OpLoad {
-            result_type: rty,
-            result: rid,
-            pointer: did,
-            memory_operands: None,
-        });
-        rid
+
+        ctx.load(rty, did)
     }
 }
 impl<T: DescriptorType> DescriptorRef<T> {
@@ -1423,14 +1373,11 @@ where
         match <Source::Output as CastableTo<T>>::STRATEGY {
             CastStrategy::Bitwise => {
                 let rty = ctx.type_id::<T>();
-                let rid = ctx.alloc_ret_id();
 
-                ctx.add_main_instruction(Instruction::OpBitcast {
+                ctx.pure_result_instruction(PureResultInstruction::OpBitcast {
                     result_type: rty,
-                    result: rid,
                     operand: source,
-                });
-                rid
+                })
             }
             _ => todo!("casting strategy"),
         }
@@ -1527,15 +1474,12 @@ where
         let src = self.0.emit(ctx);
 
         let rty = ctx.type_id::<Self::Output>();
-        let rid = ctx.alloc_ret_id();
-        ctx.add_main_instruction(Instruction::OpVectorShuffle {
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
             result_type: rty,
-            result: rid,
             vector1: src,
             vector2: src,
             components: vec![E::INDEX],
-        });
-        rid
+        })
     }
 }
 #[derive(Debug, Clone)]
@@ -1559,15 +1503,12 @@ where
         let src = self.0.emit(ctx);
 
         let rty = ctx.type_id::<Self::Output>();
-        let rid = ctx.alloc_ret_id();
-        ctx.add_main_instruction(Instruction::OpVectorShuffle {
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
             result_type: rty,
-            result: rid,
             vector1: src,
             vector2: src,
             components: vec![E::INDEX, E2::INDEX],
-        });
-        rid
+        })
     }
 }
 #[derive(Debug, Clone)]
@@ -1593,15 +1534,12 @@ where
         let src = self.0.emit(ctx);
 
         let rty = ctx.type_id::<Self::Output>();
-        let rid = ctx.alloc_ret_id();
-        ctx.add_main_instruction(Instruction::OpVectorShuffle {
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
             result_type: rty,
-            result: rid,
             vector1: src,
             vector2: src,
             components: vec![E::INDEX, E2::INDEX, E3::INDEX],
-        });
-        rid
+        })
     }
 }
 #[derive(Debug, Clone)]
@@ -1629,15 +1567,12 @@ where
         let src = self.0.emit(ctx);
 
         let rty = ctx.type_id::<Self::Output>();
-        let rid = ctx.alloc_ret_id();
-        ctx.add_main_instruction(Instruction::OpVectorShuffle {
+        ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
             result_type: rty,
-            result: rid,
             vector1: src,
             vector2: src,
             components: vec![E::INDEX, E2::INDEX, E3::INDEX, E4::INDEX],
-        });
-        rid
+        })
     }
 }
 
@@ -1654,6 +1589,8 @@ pub struct InstructionEmitter {
     entrypoint_interface_var_ids: Vec<Id>,
     main_instructions: Vec<Instruction>,
     main_instruction_ret_id_top: Id,
+    load_cache: HashMap<(Id, Id), Id>,
+    pure_result_cache: HashMap<PureResultInstruction, Id>,
 }
 impl InstructionEmitter {
     pub fn new() -> Self {
@@ -1669,6 +1606,8 @@ impl InstructionEmitter {
             entrypoint_interface_var_ids: Vec::new(),
             main_instructions: Vec::new(),
             main_instruction_ret_id_top: 0,
+            load_cache: HashMap::new(),
+            pure_result_cache: HashMap::new(),
         }
     }
 
@@ -1757,6 +1696,38 @@ impl InstructionEmitter {
         self.main_instruction_ret_id_top += 1;
 
         id
+    }
+
+    pub fn load(&mut self, result_type: Id, pointer: Id) -> Id {
+        let key = (result_type, pointer);
+
+        if !self.load_cache.contains_key(&key) {
+            let id = self.alloc_ret_id();
+            let inst = Instruction::OpLoad {
+                result_type,
+                result: id,
+                pointer,
+                memory_operands: None,
+            };
+            self.add_main_instruction(inst);
+            self.load_cache.insert(key, id);
+
+            id
+        } else {
+            self.load_cache[&key]
+        }
+    }
+
+    pub fn pure_result_instruction(&mut self, instruction: PureResultInstruction) -> Id {
+        if !self.pure_result_cache.contains_key(&instruction) {
+            let rid = self.alloc_ret_id();
+            self.add_main_instruction(Instruction::PureResult(rid, instruction.clone()));
+            self.pure_result_cache.insert(instruction, rid);
+
+            rid
+        } else {
+            self.pure_result_cache[&instruction]
+        }
     }
 
     pub fn add_main_instruction(&mut self, instruction: Instruction) {
@@ -1999,70 +1970,63 @@ impl InstructionEmitter {
                 result_type: result_type + head_base,
                 result: result + head_base,
             },
-            Instruction::OpConvertFToS {
-                result_type,
-                result,
-                float_value,
-            } => Instruction::OpConvertFToS {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                float_value: float_value + main_base,
-            },
-            Instruction::OpBitcast {
-                result_type,
-                result,
-                operand,
-            } => Instruction::OpBitcast {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                operand: operand + main_base,
-            },
-            Instruction::OpVectorShuffle {
-                result_type,
-                result,
-                vector1,
-                vector2,
-                components,
-            } => Instruction::OpVectorShuffle {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                vector1: vector1 + main_base,
-                vector2: vector2 + main_base,
-                components,
-            },
-            Instruction::OpCompositeExtract {
-                result_type,
-                result,
-                composite,
-                indexes,
-            } => Instruction::OpCompositeExtract {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                composite: composite + main_base,
-                indexes,
-            },
-            Instruction::OpIAdd {
-                result_type,
-                result,
-                operand1,
-                operand2,
-            } => Instruction::OpIAdd {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                operand1: operand1 + main_base,
-                operand2: operand2 + main_base,
-            },
-            Instruction::OpFAdd {
-                result_type,
-                result,
-                operand1,
-                operand2,
-            } => Instruction::OpFAdd {
-                result_type: result_type + head_base,
-                result: result + main_base,
-                operand1: operand1 + main_base,
-                operand2: operand2 + main_base,
-            },
+            Instruction::PureResult(result, p) => Instruction::PureResult(
+                result + main_base,
+                match p {
+                    PureResultInstruction::OpConvertFToS {
+                        result_type,
+                        float_value,
+                    } => PureResultInstruction::OpConvertFToS {
+                        result_type: result_type + head_base,
+                        float_value: float_value + main_base,
+                    },
+                    PureResultInstruction::OpBitcast {
+                        result_type,
+                        operand,
+                    } => PureResultInstruction::OpBitcast {
+                        result_type: result_type + head_base,
+                        operand: operand + main_base,
+                    },
+                    PureResultInstruction::OpVectorShuffle {
+                        result_type,
+                        vector1,
+                        vector2,
+                        components,
+                    } => PureResultInstruction::OpVectorShuffle {
+                        result_type: result_type + head_base,
+                        vector1: vector1 + main_base,
+                        vector2: vector2 + main_base,
+                        components,
+                    },
+                    PureResultInstruction::OpCompositeExtract {
+                        result_type,
+                        composite,
+                        indexes,
+                    } => PureResultInstruction::OpCompositeExtract {
+                        result_type: result_type + head_base,
+                        composite: composite + main_base,
+                        indexes,
+                    },
+                    PureResultInstruction::OpIAdd {
+                        result_type,
+                        operand1,
+                        operand2,
+                    } => PureResultInstruction::OpIAdd {
+                        result_type: result_type + head_base,
+                        operand1: operand1 + main_base,
+                        operand2: operand2 + main_base,
+                    },
+                    PureResultInstruction::OpFAdd {
+                        result_type,
+                        operand1,
+                        operand2,
+                    } => PureResultInstruction::OpFAdd {
+                        result_type: result_type + head_base,
+                        operand1: operand1 + main_base,
+                        operand2: operand2 + main_base,
+                    },
+                },
+            ),
             Instruction::OpImageRead {
                 result_type,
                 result,
