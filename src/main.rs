@@ -327,6 +327,50 @@ impl<Actions: ShaderAction> ComputeShader<Actions> {
     fn emit(&self, ctx: &mut InstructionEmitter) {
         self.actions.emit(ctx);
     }
+
+    pub fn export_module(
+        &self,
+        path: &(impl AsRef<std::path::Path> + ?Sized),
+    ) -> std::io::Result<()> {
+        let mut ctx = InstructionEmitter::new();
+        self.emit(&mut ctx);
+        let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
+        let mut serialized = Vec::with_capacity(3 + serialized1.len());
+        serialized.extend([
+            Instruction::OpCapability(Capability::Shader),
+            Instruction::OpMemoryModel(AddressingModel::Logical, MemoryModel::GLSL450),
+            Instruction::OpEntryPoint {
+                execution_model: ExecutionModel::GLCompute,
+                func_id: epid,
+                name: String::from("main"),
+                interface: interface_ids,
+            },
+            Instruction::OpExecutionMode(
+                epid,
+                ExecutionMode::LocalSize(
+                    self.local_size_x,
+                    self.local_size_y.unwrap_or(1),
+                    self.local_size_z.unwrap_or(1),
+                ),
+            ),
+        ]);
+        serialized.extend(serialized1);
+
+        let mut module = std::fs::File::options()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        let header = ModuleBinaryHeader::new(1, 0, 0, bound);
+        module.write_all(header.as_bytes())?;
+        let mut word_stream = Vec::new();
+        for x in serialized {
+            x.encode(&mut word_stream);
+        }
+        module.write_all(unsafe {
+            core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
+        })
+    }
 }
 
 pub trait Type: core::fmt::Debug {
@@ -413,6 +457,23 @@ impl<SampledType: Type + VectorTypeFamily> ImageType for Image2D<SampledType> {
     const FORMAT: ImageFormat = ImageFormat::Rgba8;
 }
 impl<SampledType: Type + VectorTypeFamily> Type for Image2D<SampledType> {
+    fn id() -> TypeId {
+        image_type_id::<Self>()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Image3D<SampledType: Type + VectorTypeFamily>(core::marker::PhantomData<SampledType>);
+impl<SampledType: Type + VectorTypeFamily> ImageType for Image3D<SampledType> {
+    type SampledType = SampledType;
+    const DIMENSION: ImageDimension = ImageDimension::Three;
+    const DEPTH: ImageDepthFlag = ImageDepthFlag::NonDepth;
+    const ARRAYED: bool = false;
+    const MULTISAMPLED: bool = false;
+    const SAMPLE_COMPAT: ImageSamplingCompatibilityFlag = ImageSamplingCompatibilityFlag::ReadWrite;
+    const FORMAT: ImageFormat = ImageFormat::Rgba8;
+}
+impl<SampledType: Type + VectorTypeFamily> Type for Image3D<SampledType> {
     fn id() -> TypeId {
         image_type_id::<Self>()
     }
@@ -1217,6 +1278,36 @@ impl<SampledType: Type + VectorTypeFamily> ImageLoadable for DescriptorImage2D<S
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct DescriptorImage3D<SampledType: Type + VectorTypeFamily = Float>(
+    core::marker::PhantomData<SampledType>,
+);
+impl<SampledType: Type + VectorTypeFamily> ImageType for DescriptorImage3D<SampledType> {
+    type SampledType = SampledType;
+    const DIMENSION: ImageDimension = ImageDimension::Three;
+    const DEPTH: ImageDepthFlag = ImageDepthFlag::NonDepth;
+    const ARRAYED: bool = false;
+    const MULTISAMPLED: bool = false;
+    const SAMPLE_COMPAT: ImageSamplingCompatibilityFlag = ImageSamplingCompatibilityFlag::ReadWrite;
+    const FORMAT: ImageFormat = ImageFormat::Rgba8;
+}
+impl<SampledType: Type + VectorTypeFamily> Type for DescriptorImage3D<SampledType> {
+    fn id() -> TypeId {
+        image_type_id::<Self>()
+    }
+}
+impl<SampledType: Type + VectorTypeFamily> DescriptorType for DescriptorImage3D<SampledType> {
+    const DEF: DescriptorRefDefinition = DescriptorRefDefinition {
+        r#type: Descriptor::Image3D,
+        mutable: false,
+        use_half_float: false,
+    };
+}
+impl<SampledType: Type + VectorTypeFamily> ImageLoadable for DescriptorImage3D<SampledType> {
+    type SampledType = SampledType;
+    type Location = Int3;
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Mutable<T>(pub T);
 impl<T: ImageType> ImageType for Mutable<T> {
     type SampledType = T::SampledType;
@@ -1358,6 +1449,18 @@ impl CastableTo<Int2> for Uint2 {
 impl CastableTo<Uint2> for Int2 {
     const STRATEGY: CastStrategy = CastStrategy::Bitwise;
 }
+impl CastableTo<Int3> for Uint3 {
+    const STRATEGY: CastStrategy = CastStrategy::Bitwise;
+}
+impl CastableTo<Uint3> for Int3 {
+    const STRATEGY: CastStrategy = CastStrategy::Bitwise;
+}
+impl CastableTo<Int4> for Uint4 {
+    const STRATEGY: CastStrategy = CastStrategy::Bitwise;
+}
+impl CastableTo<Uint4> for Int4 {
+    const STRATEGY: CastStrategy = CastStrategy::Bitwise;
+}
 
 #[derive(Debug, Clone)]
 pub struct Cast<T: Type, Source: ShaderExpression>(Source, core::marker::PhantomData<T>);
@@ -1473,6 +1576,8 @@ where
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let src = self.0.emit(ctx);
 
+        // Note: never identical (vector-type <> scalar-type)
+
         let rty = ctx.type_id::<Self::Output>();
         ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
             result_type: rty,
@@ -1501,6 +1606,13 @@ where
 
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let src = self.0.emit(ctx);
+
+        if <Self::Output as Type>::id() == <Source::Output as Type>::id()
+            && [E::INDEX, E2::INDEX] == [0, 1]
+        {
+            // identical, no operation emitted
+            return src;
+        }
 
         let rty = ctx.type_id::<Self::Output>();
         ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
@@ -1532,6 +1644,13 @@ where
 
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let src = self.0.emit(ctx);
+
+        if <Self::Output as Type>::id() == <Source::Output as Type>::id()
+            && [E::INDEX, E2::INDEX, E3::INDEX] == [0, 1, 2]
+        {
+            // identical, no operation emitted
+            return src;
+        }
 
         let rty = ctx.type_id::<Self::Output>();
         ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
@@ -1565,6 +1684,13 @@ where
 
     fn emit(&self, ctx: &mut InstructionEmitter) -> Id {
         let src = self.0.emit(ctx);
+
+        if <Self::Output as Type>::id() == <Source::Output as Type>::id()
+            && [E::INDEX, E2::INDEX, E3::INDEX, E4::INDEX] == [0, 1, 2, 3]
+        {
+            // identical, no operation emitted
+            return src;
+        }
 
         let rty = ctx.type_id::<Self::Output>();
         ctx.pure_result_instruction(PureResultInstruction::OpVectorShuffle {
@@ -2092,64 +2218,37 @@ impl InstructionEmitter {
     }
 }
 
-fn main() {
-    let mut csh_accum2 = ComputeShaderContext::new2(32, 32);
-    let src = csh_accum2.descriptor::<HalfFloatColor<DescriptorImage2D>>(0, 0);
-    let dst = csh_accum2.descriptor::<Mutable<HalfFloatColor<DescriptorImage2D>>>(1, 0);
+fn main() -> std::io::Result<()> {
+    csh_accum2().export_module("accum2.spv")?;
+    csh_accum3().export_module("accum3.spv")?;
+
+    Ok(())
+}
+
+fn csh_accum2() -> ComputeShader<impl ShaderAction> {
+    let mut ctx = ComputeShaderContext::new2(32, 32);
+    let src = ctx.descriptor::<HalfFloatColor<DescriptorImage2D>>(0, 0);
+    let dst = ctx.descriptor::<Mutable<HalfFloatColor<DescriptorImage2D>>>(1, 0);
     let p = Rc::new(
-        csh_accum2
-            .global_invocation_id()
+        ctx.global_invocation_id()
             .swizzle2(VectorElementX, VectorElementY)
             .cast::<Int2>(),
     );
     let v = src.load(p.clone()).add(dst.load(p.clone()));
 
-    let csh_accum2 = csh_accum2.combine_actions(dst.store(p, v));
-    println!("accum2 shader: {csh_accum2:#?}");
+    ctx.combine_actions(dst.store(p, v))
+}
 
-    let mut ctx = InstructionEmitter::new();
-    csh_accum2.emit(&mut ctx);
-    println!("emission result: {ctx:#?}");
-    let (epid, interface_ids, serialized1, bound) = ctx.serialize_instructions();
-    let mut serialized = Vec::with_capacity(3 + serialized1.len());
-    serialized.extend([
-        Instruction::OpCapability(Capability::Shader),
-        Instruction::OpMemoryModel(AddressingModel::Logical, MemoryModel::GLSL450),
-        Instruction::OpEntryPoint {
-            execution_model: ExecutionModel::GLCompute,
-            func_id: epid,
-            name: String::from("main"),
-            interface: interface_ids,
-        },
-        Instruction::OpExecutionMode(
-            epid,
-            ExecutionMode::LocalSize(
-                csh_accum2.local_size_x,
-                csh_accum2.local_size_y.unwrap_or(1),
-                csh_accum2.local_size_z.unwrap_or(1),
-            ),
-        ),
-    ]);
-    serialized.extend(serialized1);
-    println!("serialized: {serialized:#?}");
+fn csh_accum3() -> ComputeShader<impl ShaderAction> {
+    let mut ctx = ComputeShaderContext::new3(8, 8, 8);
+    let src = ctx.descriptor::<HalfFloatColor<DescriptorImage3D>>(0, 0);
+    let dst = ctx.descriptor::<Mutable<HalfFloatColor<DescriptorImage3D>>>(1, 0);
+    let p = Rc::new(
+        ctx.global_invocation_id()
+            .swizzle3(VectorElementX, VectorElementY, VectorElementZ)
+            .cast::<Int3>(),
+    );
+    let v = src.load(p.clone()).add(dst.load(p.clone()));
 
-    let mut module = std::fs::File::options()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open("mod.spv")
-        .expect("Failed to open output");
-    let header = ModuleBinaryHeader::new(1, 0, 0, bound);
-    module
-        .write_all(header.as_bytes())
-        .expect("Failed to write");
-    let mut word_stream = Vec::new();
-    for x in serialized {
-        x.encode(&mut word_stream);
-    }
-    module
-        .write_all(unsafe {
-            core::slice::from_raw_parts(word_stream.as_ptr() as *const u8, word_stream.len() * 4)
-        })
-        .expect("Failed to write");
+    ctx.combine_actions(dst.store(p, v))
 }
