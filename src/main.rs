@@ -529,6 +529,9 @@ pub trait TypeMulRelation<Right: Type> {
 
     fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId;
 }
+pub trait TypeCompositionRelation2<Other: Type> {
+    type Output: Type;
+}
 pub trait VectorType: Type {
     type Element: Type;
 }
@@ -695,6 +698,15 @@ impl TypeAddRelation<Float> for Float {
         })
     }
 }
+impl TypeCompositionRelation2<Float> for Float {
+    type Output = Float2;
+}
+impl TypeCompositionRelation2<Float2> for Float {
+    type Output = Float3;
+}
+impl TypeCompositionRelation2<Float3> for Float {
+    type Output = Float4;
+}
 impl VectorTypeFamily for Float {
     type Vector2 = Float2;
     type Vector3 = Float3;
@@ -721,6 +733,15 @@ impl TypeAddRelation<Uint> for Uint {
         })
     }
 }
+impl TypeCompositionRelation2<Uint> for Uint {
+    type Output = Uint2;
+}
+impl TypeCompositionRelation2<Uint2> for Uint {
+    type Output = Uint3;
+}
+impl TypeCompositionRelation2<Uint3> for Uint {
+    type Output = Uint4;
+}
 impl VectorTypeFamily for Uint {
     type Vector2 = Uint2;
     type Vector3 = Uint3;
@@ -746,6 +767,15 @@ impl TypeAddRelation<Int> for Int {
             operand2: right,
         })
     }
+}
+impl TypeCompositionRelation2<Int> for Int {
+    type Output = Int2;
+}
+impl TypeCompositionRelation2<Int2> for Int {
+    type Output = Int3;
+}
+impl TypeCompositionRelation2<Int3> for Int {
+    type Output = Int4;
 }
 impl VectorTypeFamily for Int {
     type Vector2 = Int2;
@@ -789,6 +819,12 @@ impl TypeMulRelation<Float> for Float2 {
         })
     }
 }
+impl TypeCompositionRelation2<Float> for Float2 {
+    type Output = Float3;
+}
+impl TypeCompositionRelation2<Float2> for Float2 {
+    type Output = Float4;
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Float3;
@@ -825,6 +861,9 @@ impl TypeMulRelation<Float> for Float3 {
             scalar: right,
         })
     }
+}
+impl TypeCompositionRelation2<Float> for Float3 {
+    type Output = Float4;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -887,6 +926,12 @@ impl TypeAddRelation<Int2> for Int2 {
         })
     }
 }
+impl TypeCompositionRelation2<Int> for Int2 {
+    type Output = Int3;
+}
+impl TypeCompositionRelation2<Int2> for Int2 {
+    type Output = Int4;
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Int3;
@@ -910,6 +955,9 @@ impl TypeAddRelation<Int3> for Int3 {
             operand2: right,
         })
     }
+}
+impl TypeCompositionRelation2<Int> for Int3 {
+    type Output = Int4;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -959,6 +1007,12 @@ impl TypeAddRelation<Uint2> for Uint2 {
         })
     }
 }
+impl TypeCompositionRelation2<Uint> for Uint2 {
+    type Output = Uint3;
+}
+impl TypeCompositionRelation2<Uint2> for Uint2 {
+    type Output = Uint4;
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Uint3;
@@ -982,6 +1036,9 @@ impl TypeAddRelation<Uint3> for Uint3 {
             operand2: right,
         })
     }
+}
+impl TypeCompositionRelation2<Uint> for Uint3 {
+    type Output = Uint4;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1311,6 +1368,13 @@ impl<T: ShaderExpression> ShaderExpression for Arc<T> {
 
     fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         T::emit(&self, ctx)
+    }
+}
+impl ShaderExpression for SafeFloat {
+    type Output = Float;
+
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        ctx.constant_id(Constant::Float(*self))
     }
 }
 
@@ -2041,6 +2105,26 @@ where
 }
 
 #[derive(Debug, Clone)]
+pub struct Composite2<A: ShaderExpression, B: ShaderExpression>(A, B);
+impl<A: ShaderExpression, B: ShaderExpression> ShaderExpression for Composite2<A, B>
+where
+    A::Output: TypeCompositionRelation2<B::Output>,
+{
+    type Output = <A::Output as TypeCompositionRelation2<B::Output>>::Output;
+
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let a0 = self.0.emit(ctx);
+        let a1 = self.1.emit(ctx);
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpCompositeConstruct {
+            result_type: rty,
+            constituents: vec![a0, a1],
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Store<Dest: ShaderRefExpression, Value: ShaderExpression>(Dest, Value);
 impl<
         Dest: ShaderRefExpression,
@@ -2563,6 +2647,16 @@ impl InstructionEmitter {
                         vector2: vector2.relocate(head_base, variables_base, main_base),
                         components,
                     },
+                    PureResultInstruction::OpCompositeConstruct {
+                        result_type,
+                        constituents,
+                    } => PureResultInstruction::OpCompositeConstruct {
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        constituents: constituents
+                            .into_iter()
+                            .map(|x| x.relocate(head_base, variables_base, main_base))
+                            .collect(),
+                    },
                     PureResultInstruction::OpCompositeExtract {
                         result_type,
                         composite,
@@ -2732,5 +2826,11 @@ fn vertex_color_f() -> FragmentShader<impl ShaderAction> {
     let out = ctx.output_location::<Float4>(0);
     let vcol = ctx.input_location::<Float4>(0);
 
-    ctx.combine_action(out.store(vcol.mul(vcol.swizzle1(VectorElementW))))
+    let premul = Composite2(
+        vcol.swizzle3(VectorElementX, VectorElementY, VectorElementZ),
+        unsafe { SafeFloat::new_unchecked(1.0) },
+    )
+    .mul(vcol.swizzle1(VectorElementW));
+
+    ctx.combine_action(out.store(premul))
 }

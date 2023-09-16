@@ -333,6 +333,10 @@ pub enum PureResultInstruction<IdType> {
         vector2: IdType,
         components: Vec<u32>,
     },
+    OpCompositeConstruct {
+        result_type: IdType,
+        constituents: Vec<IdType>,
+    },
     OpCompositeExtract {
         result_type: IdType,
         composite: IdType,
@@ -676,6 +680,20 @@ impl Instruction<Id> {
                     vector2,
                 ]);
                 sink.extend(components);
+            }
+            Self::PureResult(
+                result,
+                PureResultInstruction::OpCompositeConstruct {
+                    result_type,
+                    constituents,
+                },
+            ) => {
+                sink.extend([
+                    instruction_word(3 + constituents.len() as u16, 80),
+                    result_type,
+                    result,
+                ]);
+                sink.extend(constituents);
             }
             Self::PureResult(
                 result,
