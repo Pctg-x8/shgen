@@ -4,147 +4,17 @@ use std::{rc::Rc, sync::Arc};
 use crate::{
     instruction_emitter::{InstructionEmitter, RelativeId},
     spir::{
-        Builtin, ImageDepthFlag, ImageDimension, ImageFormat, ImageSamplingCompatibilityFlag,
-        Instruction, PureResultInstruction,
+        ImageDepthFlag, ImageDimension, ImageFormat, ImageSamplingCompatibilityFlag, Instruction,
+        PureResultInstruction,
     },
     Descriptor, DescriptorRefDefinition, SafeFloat,
 };
 
 pub use self::types::*;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Constant {
-    True,
-    False,
-    Null(TypeId),
-    Float(SafeFloat),
-    Uint(u32),
-    Int(i32),
-    Float2(SafeFloat, SafeFloat),
-    Float3(SafeFloat, SafeFloat, SafeFloat),
-    Float4(SafeFloat, SafeFloat, SafeFloat, SafeFloat),
-    Uint2(u32, u32),
-    Uint3(u32, u32, u32),
-    Uint4(u32, u32, u32, u32),
-    Int2(i32, i32),
-    Int3(i32, i32, i32),
-    Int4(i32, i32, i32, i32),
-}
-impl Constant {
-    pub fn make_instruction(
-        &self,
-        result: RelativeId,
-        ctx: &mut InstructionEmitter,
-    ) -> Instruction<RelativeId> {
-        match self {
-            Self::True => Instruction::OpConstantTrue {
-                result_type: ctx.type_id::<Bool>(),
-                result,
-            },
-            Self::False => Instruction::OpConstantFalse {
-                result_type: ctx.type_id::<Bool>(),
-                result,
-            },
-            Self::Null(t) => Instruction::OpConstantNull {
-                result_type: ctx.type_id_of_val(t.clone()),
-                result,
-            },
-            &Self::Float(f) => Instruction::OpConstant {
-                result_type: ctx.type_id::<Float>(),
-                result,
-                value: vec![unsafe { core::mem::transmute(f.value()) }],
-            },
-            &Self::Uint(v) => Instruction::OpConstant {
-                result_type: ctx.type_id::<Uint>(),
-                result,
-                value: vec![v],
-            },
-            &Self::Int(v) => Instruction::OpConstant {
-                result_type: ctx.type_id::<Int>(),
-                result,
-                value: vec![unsafe { core::mem::transmute(v) }],
-            },
-            &Self::Float2(x, y) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Float2>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Float(x)),
-                    ctx.constant_id(Self::Float(y)),
-                ],
-            },
-            &Self::Float3(x, y, z) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Float3>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Float(x)),
-                    ctx.constant_id(Self::Float(y)),
-                    ctx.constant_id(Self::Float(z)),
-                ],
-            },
-            &Self::Float4(x, y, z, w) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Float4>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Float(x)),
-                    ctx.constant_id(Self::Float(y)),
-                    ctx.constant_id(Self::Float(z)),
-                    ctx.constant_id(Self::Float(w)),
-                ],
-            },
-            &Self::Uint2(x, y) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Uint2>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Uint(x)),
-                    ctx.constant_id(Self::Uint(y)),
-                ],
-            },
-            &Self::Uint3(x, y, z) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Uint3>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Uint(x)),
-                    ctx.constant_id(Self::Uint(y)),
-                    ctx.constant_id(Self::Uint(z)),
-                ],
-            },
-            &Self::Uint4(x, y, z, w) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Uint4>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Uint(x)),
-                    ctx.constant_id(Self::Uint(y)),
-                    ctx.constant_id(Self::Uint(z)),
-                    ctx.constant_id(Self::Uint(w)),
-                ],
-            },
-            &Self::Int2(x, y) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Int2>(),
-                result,
-                consituents: vec![ctx.constant_id(Self::Int(x)), ctx.constant_id(Self::Int(y))],
-            },
-            &Self::Int3(x, y, z) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Int3>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Int(x)),
-                    ctx.constant_id(Self::Int(y)),
-                    ctx.constant_id(Self::Int(z)),
-                ],
-            },
-            &Self::Int4(x, y, z, w) => Instruction::OpConstantComposite {
-                result_type: ctx.type_id::<Int4>(),
-                result,
-                consituents: vec![
-                    ctx.constant_id(Self::Int(x)),
-                    ctx.constant_id(Self::Int(y)),
-                    ctx.constant_id(Self::Int(z)),
-                    ctx.constant_id(Self::Int(w)),
-                ],
-            },
-        }
-    }
-}
+mod builtin;
+pub use self::builtin::*;
+mod constant;
+pub use self::constant::*;
 
 pub trait ShaderAction: core::fmt::Debug {
     fn emit(&self, ctx: &mut InstructionEmitter);
@@ -197,14 +67,6 @@ pub trait ShaderExpression: core::fmt::Debug {
         Self: Sized + ShaderExpression<Output = Void>,
     {
         ShaderExpressionAction(self)
-    }
-
-    fn apply<Args>(self, args: Args) -> Apply<Self, Args>
-    where
-        Self: Sized,
-        Args: ShaderExpressionList,
-    {
-        Apply(self, args)
     }
 
     fn add<Right>(self, right: Right) -> Add<Self, Right>
@@ -294,8 +156,33 @@ impl ShaderExpression for SafeFloat {
 }
 
 pub trait ShaderRefExpression: ShaderExpression {
+    type StorageClass: StorageClassMarker;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId;
 
+    fn member<T: Type>(self, index: Constant) -> AccessChain<Self, T>
+    where
+        Self: Sized,
+    {
+        AccessChain(self, index, core::marker::PhantomData)
+    }
+}
+impl<T: ShaderRefExpression> ShaderRefExpression for Rc<T> {
+    type StorageClass = T::StorageClass;
+
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        T::emit_pointer(&self, ctx)
+    }
+}
+impl<T: ShaderRefExpression> ShaderRefExpression for Arc<T> {
+    type StorageClass = T::StorageClass;
+
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        T::emit_pointer(&self, ctx)
+    }
+}
+
+pub trait ShaderStorableExpression: ShaderRefExpression {
     fn store<V: ShaderExpression<Output = Self::Output>>(self, value: V) -> Store<Self, V>
     where
         Self: Sized,
@@ -303,16 +190,8 @@ pub trait ShaderRefExpression: ShaderExpression {
         Store(self, value)
     }
 }
-impl<T: ShaderRefExpression> ShaderRefExpression for Rc<T> {
-    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
-        T::emit_pointer(&self, ctx)
-    }
-}
-impl<T: ShaderRefExpression> ShaderRefExpression for Arc<T> {
-    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
-        T::emit_pointer(&self, ctx)
-    }
-}
+impl<T: ShaderStorableExpression> ShaderStorableExpression for Rc<T> {}
+impl<T: ShaderStorableExpression> ShaderStorableExpression for Arc<T> {}
 
 pub trait ShaderExpressionList: core::fmt::Debug {
     type Type: TypeList;
@@ -350,30 +229,6 @@ where
 
     fn emit_all(&self, ctx: &mut InstructionEmitter) -> Vec<RelativeId> {
         vec![self.0.emit(ctx), self.1.emit(ctx), self.2.emit(ctx)]
-    }
-}
-
-pub trait BuiltinRef {
-    const ID: Builtin;
-    type StorageClass: StorageClassMarker;
-    type ValueType: Type;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct GlobalInvocationIdRef;
-impl BuiltinRef for GlobalInvocationIdRef {
-    const ID: Builtin = Builtin::GlobalInvocationId;
-    type StorageClass = InputStorage;
-    type ValueType = Uint3;
-}
-impl ShaderExpression for GlobalInvocationIdRef {
-    type Output = Uint3;
-
-    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
-        let vid = ctx.builtin_var_id::<Self>();
-        let rty = ctx.type_id::<Self::Output>();
-
-        ctx.load(rty, vid)
     }
 }
 
@@ -443,6 +298,9 @@ where
 }
 
 pub trait DescriptorType: Type {
+    type ValueType: Type;
+    type StorageClass: StorageClassMarker;
+
     const DEF: DescriptorRefDefinition;
 }
 
@@ -451,6 +309,24 @@ pub trait ImageLoadable {
     type Location: Type;
 }
 pub trait ImageStorable: ImageLoadable {}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DescriptorUniformBlock<T: Type>(core::marker::PhantomData<T>);
+impl<T: Type> Type for DescriptorUniformBlock<T> {
+    fn id() -> TypeId {
+        T::id()
+    }
+}
+impl<T: Type> DescriptorType for DescriptorUniformBlock<T> {
+    type ValueType = T;
+    type StorageClass = UniformStorage;
+
+    const DEF: DescriptorRefDefinition = DescriptorRefDefinition {
+        r#type: Descriptor::UniformBlock,
+        mutable: false,
+        use_half_float: false,
+    };
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct DescriptorImage2D<SampledType: Type + VectorTypeFamily = Float>(
@@ -471,6 +347,9 @@ impl<SampledType: Type + VectorTypeFamily> Type for DescriptorImage2D<SampledTyp
     }
 }
 impl<SampledType: Type + VectorTypeFamily> DescriptorType for DescriptorImage2D<SampledType> {
+    type ValueType = Image2D<SampledType>;
+    type StorageClass = UniformConstantStorage;
+
     const DEF: DescriptorRefDefinition = DescriptorRefDefinition {
         r#type: Descriptor::Image2D,
         mutable: false,
@@ -501,6 +380,9 @@ impl<SampledType: Type + VectorTypeFamily> Type for DescriptorImage3D<SampledTyp
     }
 }
 impl<SampledType: Type + VectorTypeFamily> DescriptorType for DescriptorImage3D<SampledType> {
+    type ValueType = Image3D<SampledType>;
+    type StorageClass = UniformConstantStorage;
+
     const DEF: DescriptorRefDefinition = DescriptorRefDefinition {
         r#type: Descriptor::Image3D,
         mutable: false,
@@ -529,6 +411,9 @@ impl<T: ImageType> Type for Mutable<T> {
     }
 }
 impl<T: DescriptorType + ImageType> DescriptorType for Mutable<T> {
+    type ValueType = T::ValueType;
+    type StorageClass = T::StorageClass;
+
     const DEF: DescriptorRefDefinition = T::DEF.mutable();
 }
 impl<T: ImageLoadable> ImageLoadable for Mutable<T> {
@@ -554,6 +439,9 @@ impl<T: ImageType> Type for HalfFloatColor<T> {
     }
 }
 impl<T: DescriptorType + ImageType> DescriptorType for HalfFloatColor<T> {
+    type ValueType = T::ValueType;
+    type StorageClass = T::StorageClass;
+
     const DEF: DescriptorRefDefinition = T::DEF.rgba16f();
 }
 impl<T: ImageLoadable> ImageLoadable for HalfFloatColor<T> {
@@ -582,6 +470,14 @@ impl<T: DescriptorType> ShaderExpression for DescriptorRef<T> {
         ctx.load(rty, did)
     }
 }
+impl<T: DescriptorType> ShaderRefExpression for DescriptorRef<T> {
+    type StorageClass = T::StorageClass;
+
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        ctx.descriptor_var_id(self)
+    }
+}
+impl<T: DescriptorType> ShaderStorableExpression for DescriptorRef<T> {}
 impl<T: DescriptorType> DescriptorRef<T> {
     pub fn load<P>(
         self,
@@ -620,10 +516,13 @@ impl<T: Type, S: StorageClassMarker> ShaderExpression for LocationRef<T, S> {
     }
 }
 impl<T: Type> ShaderRefExpression for LocationRef<T, OutputStorage> {
+    type StorageClass = OutputStorage;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         ctx.location_var_id::<T, OutputStorage>(self.0)
     }
 }
+impl<T: Type> ShaderStorableExpression for LocationRef<T, OutputStorage> {}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum CastStrategy {
@@ -681,26 +580,6 @@ where
             }
             _ => todo!("casting strategy"),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Apply<Callable: ShaderExpression, Args: ShaderExpressionList>(Callable, Args);
-impl<
-        R: Type,
-        Callable: ShaderExpression<Output = CallableType<Args::Type, R>>,
-        Args: ShaderExpressionList,
-    > ShaderExpression for Apply<Callable, Args>
-{
-    type Output = R;
-
-    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
-        let callable = self.0.emit(ctx);
-        let args = self.1.emit_all(ctx);
-        let result_ty = ctx.type_id::<R>();
-
-        // TODO: emit instruction
-        RelativeId::Main(0)
     }
 }
 
@@ -804,6 +683,8 @@ impl<Source: ShaderRefExpression, E: VectorElementOf<Source::Output>> ShaderRefE
 where
     Source::Output: VectorType,
 {
+    type StorageClass = Source::StorageClass;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit_pointer(ctx);
         let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
@@ -815,6 +696,12 @@ where
             indexes: vec![e1],
         })
     }
+}
+impl<Source: ShaderStorableExpression, E: VectorElementOf<Source::Output>> ShaderStorableExpression
+    for VectorSwizzle1<Source, E>
+where
+    Source::Output: VectorType,
+{
 }
 
 #[derive(Debug, Clone)]
@@ -862,6 +749,8 @@ where
     Source::Output: VectorType,
     <Source::Output as VectorType>::Element: VectorTypeFamily,
 {
+    type StorageClass = Source::StorageClass;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit_pointer(ctx);
         let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
@@ -874,6 +763,16 @@ where
             indexes: vec![e1, e2],
         })
     }
+}
+impl<
+        Source: ShaderStorableExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+    > ShaderStorableExpression for VectorSwizzle2<Source, E, E2>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
 }
 
 #[derive(Debug, Clone)]
@@ -924,6 +823,8 @@ where
     Source::Output: VectorType,
     <Source::Output as VectorType>::Element: VectorTypeFamily,
 {
+    type StorageClass = Source::StorageClass;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit_pointer(ctx);
         let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
@@ -937,6 +838,17 @@ where
             indexes: vec![e1, e2, e3],
         })
     }
+}
+impl<
+        Source: ShaderStorableExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+        E3: VectorElementOf<Source::Output>,
+    > ShaderStorableExpression for VectorSwizzle3<Source, E, E2, E3>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
 }
 
 #[derive(Debug, Clone)]
@@ -990,6 +902,8 @@ where
     Source::Output: VectorType,
     <Source::Output as VectorType>::Element: VectorTypeFamily,
 {
+    type StorageClass = Source::StorageClass;
+
     fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
         let src = self.0.emit_pointer(ctx);
         let e1 = ctx.constant_id(Constant::Uint(E::INDEX));
@@ -1004,6 +918,18 @@ where
             indexes: vec![e1, e2, e3, e4],
         })
     }
+}
+impl<
+        Source: ShaderStorableExpression,
+        E: VectorElementOf<Source::Output>,
+        E2: VectorElementOf<Source::Output>,
+        E3: VectorElementOf<Source::Output>,
+        E4: VectorElementOf<Source::Output>,
+    > ShaderStorableExpression for VectorSwizzle4<Source, E, E2, E3, E4>
+where
+    Source::Output: VectorType,
+    <Source::Output as VectorType>::Element: VectorTypeFamily,
+{
 }
 
 #[derive(Debug, Clone)]
@@ -1027,9 +953,47 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct Store<Dest: ShaderRefExpression, Value: ShaderExpression>(Dest, Value);
+pub struct AccessChain<Source: ShaderRefExpression, Result: Type>(
+    Source,
+    Constant,
+    core::marker::PhantomData<Result>,
+);
+impl<Source: ShaderRefExpression, Result: Type> ShaderExpression for AccessChain<Source, Result> {
+    type Output = Result;
+
+    fn emit(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let ac = self.emit_pointer(ctx);
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.load(rty, ac)
+    }
+}
+impl<Source: ShaderRefExpression, Result: Type> ShaderRefExpression
+    for AccessChain<Source, Result>
+{
+    type StorageClass = Source::StorageClass;
+
+    fn emit_pointer(&self, ctx: &mut InstructionEmitter) -> RelativeId {
+        let src = self.0.emit_pointer(ctx);
+        let index_id = ctx.constant_id(self.1.clone());
+        let pty = ctx.type_id::<Pointer<Result, Self::StorageClass>>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpAccessChain {
+            result_type: pty,
+            base: src,
+            indexes: vec![index_id],
+        })
+    }
+}
+impl<Source: ShaderStorableExpression, Result: Type> ShaderStorableExpression
+    for AccessChain<Source, Result>
+{
+}
+
+#[derive(Debug, Clone)]
+pub struct Store<Dest: ShaderStorableExpression, Value: ShaderExpression>(Dest, Value);
 impl<
-        Dest: ShaderRefExpression,
+        Dest: ShaderStorableExpression,
         Value: ShaderExpression<Output = <Dest as ShaderExpression>::Output>,
     > ShaderAction for Store<Dest, Value>
 {

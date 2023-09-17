@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    dsl::{
-        BuiltinRef, CallableType, Constant, Pointer, StorageClassMarker, Type, TypeId,
-        UniformConstantStorage, Void,
-    },
+    dsl::{BuiltinRef, CallableType, Constant, Pointer, StorageClassMarker, Type, TypeId, Void},
     spir::{
         Builtin, Decoration, FunctionControl, Id, Instruction, PureResultInstruction, StorageClass,
     },
@@ -38,6 +35,7 @@ pub struct DescriptorRefKey {
 pub struct InstructionEmitter {
     head_slots: Vec<Instruction<RelativeId>>,
     head_id_top: Id,
+    type_decoration_slots: Vec<Instruction<RelativeId>>,
     types: HashMap<TypeId, Id>,
     constants: HashMap<Constant, Id>,
     variable_slots: Vec<Instruction<RelativeId>>,
@@ -56,6 +54,7 @@ impl InstructionEmitter {
         Self {
             head_slots: Vec::new(),
             head_id_top: 0,
+            type_decoration_slots: Vec::new(),
             types: HashMap::new(),
             constants: HashMap::new(),
             variable_slots: Vec::new(),
@@ -81,6 +80,23 @@ impl InstructionEmitter {
             self.head_id_top += 1;
             let inst = id.make_instruction(RelativeId::Head(tid), self);
             self.head_slots.push(inst);
+
+            if let TypeId::Struct(ref members) = id {
+                self.type_decoration_slots.push(Instruction::OpDecorate(
+                    RelativeId::Head(tid),
+                    Decoration::Block,
+                ));
+                self.type_decoration_slots
+                    .extend(members.iter().enumerate().flat_map(|(n, m)| {
+                        m.extra_decorations
+                            .iter()
+                            .cloned()
+                            .chain([Decoration::Offset(m.offset)])
+                            .map(move |d| {
+                                Instruction::OpMemberDecorate(RelativeId::Head(tid), n as _, d)
+                            })
+                    }));
+            }
 
             self.types.insert(id, tid);
             tid
@@ -113,11 +129,11 @@ impl InstructionEmitter {
         RelativeId::Variable(if !self.descriptor_variables.contains_key(&dk) {
             let did = self.variable_id_top;
             self.variable_id_top += 1;
-            let ty = self.type_id::<Pointer<T, UniformConstantStorage>>();
+            let ty = self.type_id::<Pointer<T, T::StorageClass>>();
             self.variable_slots.push(Instruction::OpVariable {
                 result_type: ty,
                 result: RelativeId::Variable(did),
-                storage_class: StorageClass::UniformConstant,
+                storage_class: <T::StorageClass>::VALUE,
                 initializer: None,
             });
 
@@ -287,6 +303,11 @@ impl InstructionEmitter {
             Instruction::OpDecorate(lid + variables_base, Decoration::Location(l))
         }));
         serialized.extend(
+            self.type_decoration_slots
+                .into_iter()
+                .map(|x| Self::relocate_ids(x, head_base, variables_base, main_base)),
+        );
+        serialized.extend(
             self.head_slots
                 .into_iter()
                 .map(|x| Self::relocate_ids(x, head_base, variables_base, main_base)),
@@ -335,6 +356,11 @@ impl InstructionEmitter {
             Instruction::OpDecorate(a, b) => {
                 Instruction::OpDecorate(a.relocate(head_base, variables_base, main_base), b)
             }
+            Instruction::OpMemberDecorate(s, m, d) => Instruction::OpMemberDecorate(
+                s.relocate(head_base, variables_base, main_base),
+                m,
+                d,
+            ),
             Instruction::OpEntryPoint {
                 execution_model,
                 func_id,
@@ -443,6 +469,16 @@ impl InstructionEmitter {
                 result: result.relocate(head_base, variables_base, main_base),
                 return_type: return_type.relocate(head_base, variables_base, main_base),
                 parameter_types: parameter_types
+                    .into_iter()
+                    .map(|x| x.relocate(head_base, variables_base, main_base))
+                    .collect(),
+            },
+            Instruction::OpTypeStruct {
+                result,
+                member_types,
+            } => Instruction::OpTypeStruct {
+                result: result.relocate(head_base, variables_base, main_base),
+                member_types: member_types
                     .into_iter()
                     .map(|x| x.relocate(head_base, variables_base, main_base))
                     .collect(),
@@ -575,6 +611,15 @@ impl InstructionEmitter {
                         result_type: result_type.relocate(head_base, variables_base, main_base),
                         vector: vector.relocate(head_base, variables_base, main_base),
                         scalar: scalar.relocate(head_base, variables_base, main_base),
+                    },
+                    PureResultInstruction::OpMatrixTimesVector {
+                        result_type,
+                        matrix,
+                        vector,
+                    } => PureResultInstruction::OpMatrixTimesVector {
+                        result_type: result_type.relocate(head_base, variables_base, main_base),
+                        matrix: matrix.relocate(head_base, variables_base, main_base),
+                        vector: vector.relocate(head_base, variables_base, main_base),
                     },
                     PureResultInstruction::OpAccessChain {
                         result_type,

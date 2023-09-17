@@ -29,10 +29,6 @@ impl ModuleBinaryHeader {
     pub fn into_words(self) -> [u32; 5] {
         unsafe { core::mem::transmute(self) }
     }
-
-    pub fn as_bytes(&self) -> &[u8; 4 * 5] {
-        unsafe { core::mem::transmute(self) }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
@@ -271,6 +267,7 @@ pub enum SamplerFilterMode {
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum Builtin {
+    Position = 0,
     GlobalInvocationId = 28,
 }
 
@@ -361,6 +358,11 @@ pub enum PureResultInstruction<IdType> {
         vector: IdType,
         scalar: IdType,
     },
+    OpMatrixTimesVector {
+        result_type: IdType,
+        matrix: IdType,
+        vector: IdType,
+    },
     OpAccessChain {
         result_type: IdType,
         base: IdType,
@@ -373,6 +375,7 @@ pub enum Instruction<IdType> {
     OpCapability(Capability),
     OpMemoryModel(AddressingModel, MemoryModel),
     OpDecorate(IdType, Decoration),
+    OpMemberDecorate(IdType, u32, Decoration),
     OpEntryPoint {
         execution_model: ExecutionModel,
         func_id: IdType,
@@ -424,6 +427,10 @@ pub enum Instruction<IdType> {
         result: IdType,
         return_type: IdType,
         parameter_types: Vec<IdType>,
+    },
+    OpTypeStruct {
+        result: IdType,
+        member_types: Vec<IdType>,
     },
     OpConstantTrue {
         result_type: IdType,
@@ -503,6 +510,14 @@ impl Instruction<Id> {
             Self::OpMemoryModel(a, m) => sink.extend([instruction_word(3, 14), a as _, m as _]),
             Self::OpDecorate(id, deco) => {
                 sink.extend([instruction_word(2 + deco.word_count(), 71), id]);
+                deco.encode(sink);
+            }
+            Self::OpMemberDecorate(structure_type, member, deco) => {
+                sink.extend([
+                    instruction_word(3 + deco.word_count(), 72),
+                    structure_type,
+                    member,
+                ]);
                 deco.encode(sink);
             }
             Self::OpEntryPoint {
@@ -602,6 +617,13 @@ impl Instruction<Id> {
                     return_type,
                 ]);
                 sink.extend(parameter_types);
+            }
+            Self::OpTypeStruct {
+                result,
+                member_types,
+            } => {
+                sink.extend([instruction_word(2 + member_types.len() as u16, 30), result]);
+                sink.extend(member_types);
             }
             Self::OpConstantTrue {
                 result_type,
@@ -756,6 +778,20 @@ impl Instruction<Id> {
                 result,
                 vector,
                 scalar,
+            ]),
+            Self::PureResult(
+                result,
+                PureResultInstruction::OpMatrixTimesVector {
+                    result_type,
+                    matrix,
+                    vector,
+                },
+            ) => sink.extend([
+                instruction_word(5, 145),
+                result_type,
+                result,
+                matrix,
+                vector,
             ]),
             Self::PureResult(
                 result,

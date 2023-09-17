@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, io::Write, rc::Rc};
 
 use dsl::{
-    Composite2, DescriptorImage2D, DescriptorImage3D, DescriptorRef, DescriptorType, Float4,
-    GlobalInvocationIdRef, HalfFloatColor, InputStorage, Int2, Int3, LocationRef, Mutable,
-    OutputStorage, ShaderAction, ShaderExpression, ShaderRefExpression, Type, TypeId, Uint3,
+    Composite2, Constant, DescriptorImage2D, DescriptorImage3D, DescriptorRef, DescriptorType,
+    DescriptorUniformBlock, Float4, Float4x4, GlobalInvocationIdRef, HalfFloatColor, InputStorage,
+    Int2, Int3, LocationRef, Mutable, OutputStorage, PositionRef, ShaderAction, ShaderExpression,
+    ShaderRefExpression, ShaderStorableExpression, StructMember, Type, TypeId, Uint3,
     VectorElementW, VectorElementX, VectorElementY, VectorElementZ,
 };
 use instruction_emitter::InstructionEmitter;
@@ -47,10 +48,19 @@ impl From<Descriptor> for DescriptorRefDefinition {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum Descriptor {
     Array(Box<Descriptor>),
-    UniformBuffer,
+    UniformBlock,
     StorageBuffer,
     Image2D,
     Image3D,
+}
+impl Descriptor {
+    pub const fn rw_decoratable(&self) -> bool {
+        match self {
+            Self::Array(a) => a.rw_decoratable(),
+            Self::StorageBuffer | Self::Image2D | Self::Image3D => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -431,6 +441,12 @@ impl VertexShaderContext {
         LocationRef(location, core::marker::PhantomData)
     }
 
+    pub fn position(
+        &self,
+    ) -> impl ShaderStorableExpression<Output = Float4, StorageClass = OutputStorage> {
+        PositionRef
+    }
+
     pub fn combine_action<Action: ShaderAction>(self, action: Action) -> VertexShader<Action> {
         VertexShader {
             inputs: self.inputs,
@@ -525,6 +541,7 @@ fn main() -> std::io::Result<()> {
     csh_accum2().export_module("accum2.spv")?;
     csh_accum3().export_module("accum3.spv")?;
     vertex_color_f().export_module("vertex_color_f.spv")?;
+    vertex().export_module("vertex.spv")?;
 
     Ok(())
 }
@@ -571,4 +588,34 @@ fn vertex_color_f() -> FragmentShader<impl ShaderAction> {
     .mul(vcol.swizzle1(VectorElementW));
 
     ctx.combine_action(out.store(premul))
+}
+
+fn vertex() -> VertexShader<impl ShaderAction> {
+    let mut ctx = VertexShaderContext::new();
+    let pos = ctx.input_location::<Float4>(0);
+    let vcol = ctx.input_location::<Float4>(1);
+    let ocol = ctx.output_location::<Float4>(0);
+    let camera_uniform = ctx.descriptor::<DescriptorUniformBlock<CustomUniformStruct>>(0, 0);
+
+    let ctrans = ocol.store(vcol);
+    let vtrans = ctx
+        .position()
+        .store(CustomUniformStruct::mvp(camera_uniform).mul(pos));
+
+    ctx.combine_action(vtrans.then(ctrans))
+}
+
+#[derive(Debug)]
+struct CustomUniformStruct;
+impl Type for CustomUniformStruct {
+    fn id() -> TypeId {
+        TypeId::Struct(vec![StructMember::of_type::<Float4x4>(0)])
+    }
+}
+impl CustomUniformStruct {
+    pub fn mvp(
+        src: impl ShaderRefExpression<Output = impl DescriptorType<ValueType = Self>>,
+    ) -> impl ShaderRefExpression<Output = Float4x4> {
+        src.member::<Float4x4>(Constant::Uint(0))
+    }
 }

@@ -1,10 +1,15 @@
 use crate::{
     instruction_emitter::{InstructionEmitter, RelativeId},
     spir::{
-        AccessQualifier, ImageDepthFlag, ImageDimension, ImageFormat,
+        AccessQualifier, Decoration, ImageDepthFlag, ImageDimension, ImageFormat,
         ImageSamplingCompatibilityFlag, Instruction, PureResultInstruction, StorageClass,
     },
 };
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct MatrixProperties {
+    pub col_major: bool,
+}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum TypeId {
@@ -63,6 +68,7 @@ pub enum TypeId {
         access_qualifier: Option<AccessQualifier>,
     },
     Pointer(Box<TypeId>, StorageClass),
+    Struct(Vec<StructMember>),
 }
 impl TypeId {
     pub fn make_instruction(
@@ -163,12 +169,39 @@ impl TypeId {
                 storage_class: *storage_class,
                 r#type: ctx.type_id_of_val(org_type.as_ref().clone()),
             },
+            Self::Struct(member_types) => Instruction::OpTypeStruct {
+                result,
+                member_types: member_types
+                    .iter()
+                    .map(|t| ctx.type_id_of_val(t.r#type.clone()))
+                    .collect(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct StructMember {
+    pub r#type: TypeId,
+    pub offset: u32,
+    pub extra_decorations: Vec<Decoration>,
+}
+impl StructMember {
+    pub fn of_type<T: Type>(offset: u32) -> Self {
+        Self {
+            r#type: T::id(),
+            offset,
+            extra_decorations: T::variable_extra_decorations(),
         }
     }
 }
 
 pub trait Type: core::fmt::Debug {
     fn id() -> TypeId;
+
+    fn variable_extra_decorations() -> Vec<Decoration> {
+        vec![]
+    }
 }
 pub trait TypeAddRelation<Right: Type> {
     type Output: Type;
@@ -190,6 +223,11 @@ pub trait VectorTypeFamily {
     type Vector2: Type;
     type Vector3: Type;
     type Vector4: Type;
+}
+pub trait MatrixType: Type {
+    type Column: VectorType;
+    const COL_MAJOR: bool;
+    const STRIDE: u32;
 }
 pub trait ImageType: Type {
     type SampledType: Type + VectorTypeFamily;
@@ -213,6 +251,17 @@ pub fn image_type_id<T: ImageType>() -> TypeId {
         image_format: T::FORMAT,
         access_qualifier: T::QUALIFIER,
     }
+}
+
+pub fn matrix_type_decorations<T: MatrixType>() -> Vec<Decoration> {
+    vec![
+        Decoration::MatrixStride(T::STRIDE),
+        if T::COL_MAJOR {
+            Decoration::ColMajor
+        } else {
+            Decoration::RowMajor
+        },
+    ]
 }
 
 pub trait TypeList: core::fmt::Debug {
@@ -250,11 +299,18 @@ impl<Args: TypeList, Return: Type> Type for CallableType<Args, Return> {
 pub trait StorageClassMarker: core::fmt::Debug {
     const VALUE: StorageClass;
 }
+pub trait StorableStorageClassMarker: StorageClassMarker {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct UniformConstantStorage;
 impl StorageClassMarker for UniformConstantStorage {
     const VALUE: StorageClass = StorageClass::UniformConstant;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UniformStorage;
+impl StorageClassMarker for UniformStorage {
+    const VALUE: StorageClass = StorageClass::Uniform;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -268,6 +324,7 @@ pub struct OutputStorage;
 impl StorageClassMarker for OutputStorage {
     const VALUE: StorageClass = StorageClass::Output;
 }
+impl StorableStorageClassMarker for OutputStorage {}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Pointer<T: Type, C: StorageClassMarker>(core::marker::PhantomData<(T, C)>);
@@ -676,6 +733,36 @@ impl TypeAddRelation<Uint4> for Uint4 {
             result_type: rty,
             operand1: left,
             operand2: right,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Float4x4;
+impl Type for Float4x4 {
+    fn id() -> TypeId {
+        TypeId::Float4x4
+    }
+
+    fn variable_extra_decorations() -> Vec<Decoration> {
+        matrix_type_decorations::<Self>()
+    }
+}
+impl MatrixType for Float4x4 {
+    type Column = Float4;
+    const COL_MAJOR: bool = true;
+    const STRIDE: u32 = 16;
+}
+impl TypeMulRelation<Float4> for Float4x4 {
+    type Output = Float4;
+
+    fn emit(left: RelativeId, right: RelativeId, ctx: &mut InstructionEmitter) -> RelativeId {
+        let rty = ctx.type_id::<Self::Output>();
+
+        ctx.pure_result_instruction(PureResultInstruction::OpMatrixTimesVector {
+            result_type: rty,
+            matrix: left,
+            vector: right,
         })
     }
 }
